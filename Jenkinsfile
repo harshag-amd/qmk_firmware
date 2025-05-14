@@ -18,7 +18,7 @@ pipeline {
     }
 
     stages {
-        stage('Declarative: Checkout SCM') {
+        stage('Declarative: Pipeline Intializing') {
             steps {
                 echo 'Pipeline initialized.'
             }
