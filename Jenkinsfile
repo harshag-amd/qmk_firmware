@@ -52,12 +52,12 @@ pipeline {
                     sh '''
                         if [ -f "$FIRMWARE_LOCAL_DIR/harsha" ]; then
                             echo "SCP harsha..."
-                            scp $SCP_OPTIONS $FIRMWARE_LOCAL_DIR/harsha $DEST_USER@$DEST_HOST:$DEST_PATH
+                            sudo scp $SCP_OPTIONS $FIRMWARE_LOCAL_DIR/harsha $DEST_USER@$DEST_HOST:$DEST_PATH
                         fi
 
                         if [ -f "$FIRMWARE_LOCAL_DIR/herk" ]; then
                             echo "SCP herk..."
-                            scp $SCP_OPTIONS $FIRMWARE_LOCAL_DIR/herk $DEST_USER@$DEST_HOST:$DEST_PATH
+                            sudo scp $SCP_OPTIONS $FIRMWARE_LOCAL_DIR/herk $DEST_USER@$DEST_HOST:$DEST_PATH
                         fi
                     '''
                 }
