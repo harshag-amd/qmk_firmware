@@ -3,7 +3,7 @@ pipeline {
 
     parameters {
         string(name: 'USERNAME', defaultValue: 'herky', description: 'Username for target server(s)')
-        text(name: 'TARGET_HOSTS', defaultValue: '10.0.0.5\n10.0.0.6', description: 'List of target server IPs (one per line)')
+        text(name: 'TARGET_HOSTS', defaultValue: '10.86.22.146', description: 'List of target server IPs (one per line)')
         string(name: 'TARGET_PATH', defaultValue: '/opt/firmware/', description: 'Destination path on target servers')
     }
 
