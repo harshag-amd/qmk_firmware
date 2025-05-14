@@ -2,42 +2,44 @@ pipeline {
     agent any
 
     environment {
-        FIRMWARE_FILE_REPO = "qmk_firmware/herk"
-        FIRMWARE_FILE_LOCAL = "/opt/herk"
+        FIRMWARE_DIR_REPO = "firmware"
+        FIRMWARE_FILE_LOCAL = "/opt/firmware"
     }
 
     triggers {
-        githubPush() // 👈 Tells Jenkins this is triggered by GitHub webhook
+        pollSCM('H/5 * * * *') // Polls every 5 minutes
     }
 
     stages {
         stage('Checkout') {
             steps {
-                checkout scm
+                git url: 'https://github.com/your-org/qmk_firmware.git', branch: 'main'
             }
         }
 
         stage('Copy Firmware') {
             when {
-                changeset "**/firmware/firmware-latest.bin"
+                changeset "**/firmware/harsha", "**/firmware/herk"
             }
             steps {
                 sh '''
-                    mkdir -p $(dirname $FIRMWARE_FILE_LOCAL)
-                    cp $FIRMWARE_FILE_REPO $FIRMWARE_FILE_LOCAL
-                    echo "Firmware copied to $FIRMWARE_FILE_LOCAL"
+                    mkdir -p $FIRMWARE_FILE_LOCAL
+                    cp $FIRMWARE_DIR_REPO/harsha $FIRMWARE_FILE_LOCAL/harsha 2>/dev/null || true
+                    cp $FIRMWARE_DIR_REPO/herk $FIRMWARE_FILE_LOCAL/herk 2>/dev/null || true
+                    echo "Firmware files copied to $FIRMWARE_FILE_LOCAL"
                 '''
             }
         }
 
         stage('Flash Firmware') {
             when {
-                changeset "**/firmware/firmware-latest.bin"
+                changeset "**/firmware/harsha", "**/firmware/herk"
             }
             steps {
                 sh '''
                     chmod +x /usr/local/bin/flash_apu.sh
-                    /usr/local/bin/flash_apu.sh $FIRMWARE_FILE_LOCAL
+                    /usr/local/bin/flash_apu.sh $FIRMWARE_FILE_LOCAL/harsha || true
+                    /usr/local/bin/flash_apu.sh $FIRMWARE_FILE_LOCAL/herk || true
                 '''
             }
         }
@@ -45,11 +47,11 @@ pipeline {
         stage('No Firmware Change') {
             when {
                 not {
-                    changeset "**/firmware/firmware-latest.bin"
+                    changeset "**/firmware/harsha", "**/firmware/herk"
                 }
             }
             steps {
-                echo "No firmware update detected — skipping flash."
+                echo "No firmware update (harsha/herk) detected — skipping flash."
             }
         }
     }
