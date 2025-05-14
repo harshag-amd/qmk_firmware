@@ -5,7 +5,7 @@ pipeline {
         string(name: 'USERNAME', defaultValue: 'herky', description: 'Username for target server(s)')
         text(name: 'TARGET_HOSTS', defaultValue: '10.86.22.146', description: 'List of target server IPs (one per line)')
         string(name: 'TARGET_PATH', defaultValue: '/opt/firmware/', description: 'Destination path on target servers')
-        text(name: 'FIRMWARE_FILES', defaultValue: 'harsha\nherk', description: 'List of firmware file names to monitor (one per line)')
+        text(name: 'FIRMWARE_FILES', defaultValue: 'harsha\nherk', description: 'List of firmware files to monitor (one per line)')
         choice(name: 'PKG_MANAGER', choices: ['apt', 'dnf', 'yum'], description: 'Package manager to run system update')
     }
 
@@ -14,13 +14,13 @@ pipeline {
     }
 
     triggers {
-        pollSCM('* * * * *') // Poll every minute
+        pollSCM('* * * * *') // Every minute
     }
 
     stages {
         stage('Declarative: Checkout SCM') {
             steps {
-                echo 'Declarative pipeline initialized.'
+                echo 'Pipeline initialized.'
             }
         }
 
@@ -56,11 +56,9 @@ pipeline {
             }
         }
 
-        stage('Copy Firmware Files to Target Servers') {
+        stage('Copy Changed Firmware Files') {
             when {
-                expression {
-                    return env.CHANGED_FILES?.trim()
-                }
+                expression { return env.CHANGED_FILES?.trim() }
             }
             steps {
                 sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
@@ -73,11 +71,11 @@ pipeline {
                                 def filePath = "${FIRMWARE_DIR_REPO}/${file}"
                                 if (fileExists(filePath)) {
                                     sh """
-                                        echo "Transferring ${file} to ${host}..."
+                                        echo "Copying ${file} to ${host}..."
                                         scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${filePath} ${params.USERNAME}@${host}:${params.TARGET_PATH}
                                     """
                                 } else {
-                                    echo "Warning: ${filePath} does not exist."
+                                    echo "Warning: ${filePath} not found."
                                 }
                             }
                         }
@@ -86,20 +84,16 @@ pipeline {
             }
         }
 
-        stage('Run Update') {
+        stage('Update Servers') {
             when {
-                not {
-                    expression {
-                        return env.CHANGED_FILES?.trim()
-                    }
-                }
+                expression { return env.CHANGED_FILES?.trim() }
             }
             steps {
                 sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
                     script {
                         def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
-
                         def updateCmd = ""
+
                         switch (params.PKG_MANAGER) {
                             case "apt":
                                 updateCmd = "sudo apt update -y && sudo apt upgrade -y"
@@ -114,12 +108,23 @@ pipeline {
 
                         for (host in hosts) {
                             sh """
-                                echo "Running system update on ${host} using ${params.PKG_MANAGER}..."
+                                echo "Running ${params.PKG_MANAGER} update on ${host}..."
                                 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${params.USERNAME}@${host} '${updateCmd}'
                             """
                         }
                     }
                 }
+            }
+        }
+
+        stage('No Change Detected') {
+            when {
+                not {
+                    expression { return env.CHANGED_FILES?.trim() }
+                }
+            }
+            steps {
+                echo "No firmware changes detected. Skipping copy and update stages."
             }
         }
     }
