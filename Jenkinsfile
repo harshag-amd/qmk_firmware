@@ -6,12 +6,12 @@ pipeline {
         FIRMWARE_LOCAL_DIR = "${WORKSPACE}/firmware"
         DEST_USER = "herky"
         DEST_HOST = "10.86.22.146"
-        DEST_PATH = "/Downloads/firmware"
+        DEST_PATH = "${WORKSPACE}/firmware" // this is just for clarity; used only locally
         SCP_OPTIONS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
     }
 
     triggers {
-        pollSCM('* * * * *')
+        pollSCM('* * * * *') // Poll every minute
     }
 
     stages {
@@ -21,7 +21,7 @@ pipeline {
             }
         }
 
-        stage('Prepare & Transfer Firmware') {
+        stage('Check Firmware Changes') {
             steps {
                 script {
                     def hasHarsha = fileExists("${FIRMWARE_REPO_DIR}/harsha")
@@ -29,37 +29,24 @@ pipeline {
 
                     if (!hasHarsha && !hasHerk) {
                         echo "No firmware changes detected — skipping transfer."
-                        currentBuild.result = 'SUCCESS'
                         return
                     }
-                }
 
-                sh '''
-                    mkdir -p $FIRMWARE_LOCAL_DIR
+                    sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
+                        if (hasHarsha) {
+                            sh """
+                                echo "Transferring harsha..."
+                                scp $SCP_OPTIONS "$FIRMWARE_REPO_DIR/harsha" "$DEST_USER@$DEST_HOST:$FIRMWARE_REPO_DIR/harsha"
+                            """
+                        }
 
-                    if [ -f "$FIRMWARE_REPO_DIR/harsha" ]; then
-                        echo "Copying harsha..."
-                        cp $FIRMWARE_REPO_DIR/harsha $FIRMWARE_LOCAL_DIR/harsha
-                    fi
-
-                    if [ -f "$FIRMWARE_REPO_DIR/herk" ]; then
-                        echo "Copying herk..."
-                        cp $FIRMWARE_REPO_DIR/herk $FIRMWARE_LOCAL_DIR/herk
-                    fi
-                '''
-
-                sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
-                    sh '''
-                        if [ -f "$FIRMWARE_LOCAL_DIR/harsha" ]; then
-                            echo "SCP harsha..."
-                            scp $SCP_OPTIONS $FIRMWARE_LOCAL_DIR/harsha $DEST_USER@$DEST_HOST:$DEST_PATH
-                        fi
-
-                        if [ -f "$FIRMWARE_LOCAL_DIR/herk" ]; then
-                            echo "SCP herk..."
-                            scp $SCP_OPTIONS $FIRMWARE_LOCAL_DIR/herk $DEST_USER@$DEST_HOST:$DEST_PATH
-                        fi
-                    '''
+                        if (hasHerk) {
+                            sh """
+                                echo "Transferring herk..."
+                                scp $SCP_OPTIONS "$FIRMWARE_REPO_DIR/herk" "$DEST_USER@$DEST_HOST:$FIRMWARE_REPO_DIR/herk"
+                            """
+                        }
+                    }
                 }
             }
         }
@@ -67,10 +54,10 @@ pipeline {
         stage('Flash Firmware on Remote APU') {
             steps {
                 sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
-                    sh '''
+                    sh """
                         echo "Running remote firmware flash..."
                         ssh $SCP_OPTIONS $DEST_USER@$DEST_HOST 'sudo /usr/local/bin/flash_apu.sh'
-                    '''
+                    """
                 }
             }
         }
