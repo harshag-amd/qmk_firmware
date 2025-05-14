@@ -6,7 +6,7 @@ pipeline {
         FIRMWARE_LOCAL_DIR = "/Downloads/firmware"
         DEST_USER = "herky"
         DEST_HOST = "10.86.22.146"
-        DEST_PATH = "/opt/firmware"
+        DEST_PATH = "/Downloads/firmware"
         SCP_OPTIONS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
     }
 
