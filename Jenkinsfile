@@ -2,8 +2,8 @@ pipeline {
     agent any
 
     environment {
-        FIRMWARE_FILE_REPO = "firmware/firmware-latest.bin"
-        FIRMWARE_FILE_LOCAL = "/opt/firmware/latest_firmware.bin"
+        FIRMWARE_FILE_REPO = "qmk_firmware/herk"
+        FIRMWARE_FILE_LOCAL = "/opt/herk"
     }
 
     triggers {
