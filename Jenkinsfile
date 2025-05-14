@@ -2,97 +2,76 @@ pipeline {
     agent any
 
     environment {
-        FIRMWARE_DIR_REPO = "firmware"
-        FIRMWARE_FILE_LOCAL = "/opt/firmware"
+        FIRMWARE_REPO_DIR = "firmware"
+        FIRMWARE_LOCAL_DIR = "/opt/firmware"
         DEST_USER = "herky"
         DEST_HOST = "10.86.22.146"
-        DEST_PATH = "/opt/firmware/"
+        DEST_PATH = "/opt/firmware"
         SCP_OPTIONS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
     }
 
     triggers {
-        pollSCM('* * * * *') // every 5 minutes
+        pollSCM('* * * * *') // Poll every 2 mins
     }
 
     stages {
         stage('Checkout') {
             steps {
-                git url: 'https://github.com/harshag-amd/qmk_firmware.git', branch: 'master'
+                checkout scm
             }
         }
 
-        stage('Detect Changes') {
-            when {
-                expression {
-                    def changeLog = currentBuild.changeSets
-                    def changed = false
-                    for (change in changeLog) {
-                        for (file in change.items.collectMany { it.affectedFiles }) {
-                            if (file.path == "firmware/harsha" || file.path == "firmware/herk") {
-                                changed = true
-                            }
-                        }
-                    }
-                    return changed
-                }
-            }
+        stage('Prepare & Transfer Firmware') {
             steps {
-                echo "Firmware change detected"
-            }
-        }
+                script {
+                    def hasHarsha = fileExists("${FIRMWARE_REPO_DIR}/harsha")
+                    def hasHerk = fileExists("${FIRMWARE_REPO_DIR}/herk")
 
-        stage('Download and Copy Firmware') {
-            when {
-                expression {
-                    def changeLog = currentBuild.changeSets
-                    def changed = false
-                    for (change in changeLog) {
-                        for (file in change.items.collectMany { it.affectedFiles }) {
-                            if (file.path == "firmware/harsha" || file.path == "firmware/herk") {
-                                changed = true
-                            }
-                        }
+                    if (!hasHarsha && !hasHerk) {
+                        echo "No firmware changes detected — skipping transfer."
+                        currentBuild.result = 'SUCCESS'
+                        return
                     }
-                    return changed
                 }
-            }
-            steps {
+
                 sh '''
-                    sudo mkdir -p $FIRMWARE_FILE_LOCAL
+                    sudo mkdir -p $FIRMWARE_LOCAL_DIR
 
-                    if [ -f "$FIRMWARE_DIR_REPO/harsha" ]; then
+                    if [ -f "$FIRMWARE_REPO_DIR/harsha" ]; then
                         echo "Copying harsha..."
-                        sudo cp $FIRMWARE_DIR_REPO/harsha $FIRMWARE_FILE_LOCAL/harsha
-                        scp $SCP_OPTIONS $FIRMWARE_FILE_LOCAL/harsha $DEST_USER@$DEST_HOST:$DEST_PATH
+                        sudo cp $FIRMWARE_REPO_DIR/harsha $FIRMWARE_LOCAL_DIR/harsha
                     fi
 
-                    if [ -f "$FIRMWARE_DIR_REPO/herk" ]; then
+                    if [ -f "$FIRMWARE_REPO_DIR/herk" ]; then
                         echo "Copying herk..."
-                        sudo cp $FIRMWARE_DIR_REPO/herk $FIRMWARE_FILE_LOCAL/herk
-                        scp $SCP_OPTIONS $FIRMWARE_FILE_LOCAL/herk $DEST_USER@$DEST_HOST:$DEST_PATH
+                        sudo cp $FIRMWARE_REPO_DIR/herk $FIRMWARE_LOCAL_DIR/herk
                     fi
                 '''
+
+                sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
+                    sh '''
+                        if [ -f "$FIRMWARE_LOCAL_DIR/harsha" ]; then
+                            echo "SCP harsha..."
+                            scp $SCP_OPTIONS $FIRMWARE_LOCAL_DIR/harsha $DEST_USER@$DEST_HOST:$DEST_PATH
+                        fi
+
+                        if [ -f "$FIRMWARE_LOCAL_DIR/herk" ]; then
+                            echo "SCP herk..."
+                            scp $SCP_OPTIONS $FIRMWARE_LOCAL_DIR/herk $DEST_USER@$DEST_HOST:$DEST_PATH
+                        fi
+                    '''
+                }
             }
         }
 
-        stage('No Change Detected') {
-            when {
-                not {
-                    expression {
-                        def changeLog = currentBuild.changeSets
-                        for (change in changeLog) {
-                            for (file in change.items.collectMany { it.affectedFiles }) {
-                                if (file.path == "firmware/harsha" || file.path == "firmware/herk") {
-                                    return false // change found
-                                }
-                            }
-                        }
-                        return true // no change found
-                    }
-                }
-            }
+        stage('Flash Firmware on Remote APU') {
             steps {
-                echo "No firmware change in harsha or herk."
+                sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
+                    sh '''
+                        echo "Running remote firmware flash..."
+                        ssh $SCP_OPTIONS $DEST_USER@$DEST_HOST 'sudo /usr/local/bin/flash_apu.sh'
+                    '''
+                }
             }
         }
     }
