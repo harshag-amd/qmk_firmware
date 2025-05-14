@@ -7,6 +7,7 @@ pipeline {
         DEST_USER = "herky"
         DEST_HOST = "10.86.22.146"
         DEST_PATH = "/opt/firmware/"
+        SCP_OPTIONS = "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
     }
 
     triggers {
