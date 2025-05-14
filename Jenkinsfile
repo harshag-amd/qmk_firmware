@@ -5,11 +5,12 @@ pipeline {
         string(name: 'USERNAME', defaultValue: 'herky', description: 'Username for target server(s)')
         text(name: 'TARGET_HOSTS', defaultValue: '10.86.22.146', description: 'List of target server IPs (one per line)')
         string(name: 'TARGET_PATH', defaultValue: '/opt/firmware/', description: 'Destination path on target servers')
+        text(name: 'FIRMWARE_FILES', defaultValue: 'harsha\nherk', description: 'List of firmware file names to monitor (one per line)')
+        choice(name: 'PKG_MANAGER', choices: ['apt', 'dnf', 'yum'], description: 'Package manager to run system update')
     }
 
     environment {
         FIRMWARE_DIR_REPO = "firmware"
-        FIRMWARE_FILE_LOCAL = "${env.WORKSPACE}/firmware"
     }
 
     triggers {
@@ -17,6 +18,12 @@ pipeline {
     }
 
     stages {
+        stage('Declarative: Checkout SCM') {
+            steps {
+                echo 'Declarative pipeline initialized.'
+            }
+        }
+
         stage('Checkout') {
             steps {
                 git url: 'https://github.com/harshag-amd/qmk_firmware.git', branch: 'master'
@@ -24,58 +31,53 @@ pipeline {
         }
 
         stage('Detect Changes') {
-            when {
-                expression {
+            steps {
+                script {
                     def changeLog = currentBuild.changeSets
-                    def changed = false
+                    def monitoredFiles = params.FIRMWARE_FILES.split("\n").collect { it.trim() }.findAll { it }
+                    def changedFiles = []
+
                     for (change in changeLog) {
                         for (file in change.items.collectMany { it.affectedFiles }) {
-                            if (file.path == "firmware/harsha" || file.path == "firmware/herk") {
-                                changed = true
+                            def fileName = file.path.replaceFirst("^firmware/", "")
+                            if (monitoredFiles.contains(fileName)) {
+                                changedFiles << fileName
                             }
                         }
                     }
-                    return changed
+
+                    env.CHANGED_FILES = changedFiles.join(",")
+                    if (changedFiles.isEmpty()) {
+                        echo "No monitored firmware files changed."
+                    } else {
+                        echo "Detected changes in: ${env.CHANGED_FILES}"
+                    }
                 }
-            }
-            steps {
-                echo "Firmware change detected"
             }
         }
 
         stage('Copy Firmware Files to Target Servers') {
             when {
                 expression {
-                    def changeLog = currentBuild.changeSets
-                    def changed = false
-                    for (change in changeLog) {
-                        for (file in change.items.collectMany { it.affectedFiles }) {
-                            if (file.path == "firmware/harsha" || file.path == "firmware/herk") {
-                                changed = true
-                            }
-                        }
-                    }
-                    return changed
+                    return env.CHANGED_FILES?.trim()
                 }
             }
             steps {
                 sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
                     script {
-                        def hosts = params.TARGET_HOSTS.split("\n")
+                        def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
+                        def changedFiles = env.CHANGED_FILES.split(",").collect { it.trim() }
+
                         for (host in hosts) {
-                            host = host.trim()
-                            if (host) {
-                                if (fileExists("${FIRMWARE_DIR_REPO}/harsha")) {
+                            for (file in changedFiles) {
+                                def filePath = "${FIRMWARE_DIR_REPO}/${file}"
+                                if (fileExists(filePath)) {
                                     sh """
-                                        echo "Transferring harsha to ${host}"
-                                        scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${FIRMWARE_DIR_REPO}/harsha ${params.USERNAME}@${host}:${params.TARGET_PATH}
+                                        echo "Transferring ${file} to ${host}..."
+                                        scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${filePath} ${params.USERNAME}@${host}:${params.TARGET_PATH}
                                     """
-                                }
-                                if (fileExists("${FIRMWARE_DIR_REPO}/herk")) {
-                                    sh """
-                                        echo "Transferring herk to ${host}"
-                                        scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${FIRMWARE_DIR_REPO}/herk ${params.USERNAME}@${host}:${params.TARGET_PATH}
-                                    """
+                                } else {
+                                    echo "Warning: ${filePath} does not exist."
                                 }
                             }
                         }
@@ -84,24 +86,40 @@ pipeline {
             }
         }
 
-        stage('No Change Detected') {
+        stage('Run Update') {
             when {
                 not {
                     expression {
-                        def changeLog = currentBuild.changeSets
-                        for (change in changeLog) {
-                            for (file in change.items.collectMany { it.affectedFiles }) {
-                                if (file.path == "firmware/harsha" || file.path == "firmware/herk") {
-                                    return false
-                                }
-                            }
-                        }
-                        return true
+                        return env.CHANGED_FILES?.trim()
                     }
                 }
             }
             steps {
-                echo "No firmware changes detected."
+                sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
+                    script {
+                        def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
+
+                        def updateCmd = ""
+                        switch (params.PKG_MANAGER) {
+                            case "apt":
+                                updateCmd = "sudo apt update -y && sudo apt upgrade -y"
+                                break
+                            case "dnf":
+                                updateCmd = "sudo dnf update -y"
+                                break
+                            case "yum":
+                                updateCmd = "sudo yum update -y"
+                                break
+                        }
+
+                        for (host in hosts) {
+                            sh """
+                                echo "Running system update on ${host} using ${params.PKG_MANAGER}..."
+                                ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${params.USERNAME}@${host} '${updateCmd}'
+                            """
+                        }
+                    }
+                }
             }
         }
     }
