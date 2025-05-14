@@ -7,19 +7,22 @@ pipeline {
     }
 
     triggers {
-        pollSCM('H/5 * * * *') // Polls every 5 minutes
+        pollSCM('H/5 * * * *')
     }
 
     stages {
         stage('Checkout') {
             steps {
-                git url: 'https://github.com/your-org/qmk_firmware.git', branch: 'master'
+                git url: 'https://github.com/harshag-amd/qmk_firmware.git', branch: 'master'
             }
         }
 
         stage('Copy Firmware') {
             when {
-                changeset "**/firmware/harsha", "**/firmware/herk"
+                changeset {
+                    file '**/firmware/harsha'
+                    file '**/firmware/herk'
+                }
             }
             steps {
                 sh '''
@@ -33,7 +36,10 @@ pipeline {
 
         stage('Flash Firmware') {
             when {
-                changeset "**/firmware/harsha", "**/firmware/herk"
+                changeset {
+                    file '**/firmware/harsha'
+                    file '**/firmware/herk'
+                }
             }
             steps {
                 sh '''
@@ -47,7 +53,10 @@ pipeline {
         stage('No Firmware Change') {
             when {
                 not {
-                    changeset "**/firmware/harsha", "**/firmware/herk"
+                    changeset {
+                        file '**/firmware/harsha'
+                        file '**/firmware/herk'
+                    }
                 }
             }
             steps {
