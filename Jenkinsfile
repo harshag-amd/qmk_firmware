@@ -57,7 +57,7 @@ pipeline {
             }
             steps {
                 sh '''
-                    mkdir -p $FIRMWARE_FILE_LOCAL
+                    sudo mkdir -p $FIRMWARE_FILE_LOCAL
 
                     if [ -f "$FIRMWARE_DIR_REPO/harsha" ]; then
                         echo "Copying harsha..."
