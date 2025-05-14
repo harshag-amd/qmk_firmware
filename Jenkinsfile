@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         FIRMWARE_REPO_DIR = "firmware"
-        FIRMWARE_LOCAL_DIR = "/Downloads/firmware"
+        FIRMWARE_LOCAL_DIR = "${WORKSPACE}/firmware"
         DEST_USER = "herky"
         DEST_HOST = "10.86.22.146"
         DEST_PATH = "/Downloads/firmware"
@@ -11,7 +11,7 @@ pipeline {
     }
 
     triggers {
-        pollSCM('* * * * *') // Poll every 2 mins
+        pollSCM('* * * * *')
     }
 
     stages {
@@ -35,17 +35,16 @@ pipeline {
                 }
 
                 sh '''
-                    sudo mkdir -p $FIRMWARE_LOCAL_DIR
-                    sudo chown -R jenkins:jenkins $FIRMWARE_LOCAL_DIR
+                    mkdir -p $FIRMWARE_LOCAL_DIR
 
                     if [ -f "$FIRMWARE_REPO_DIR/harsha" ]; then
                         echo "Copying harsha..."
-                        sudo cp $FIRMWARE_REPO_DIR/harsha $FIRMWARE_LOCAL_DIR/harsha
+                        cp $FIRMWARE_REPO_DIR/harsha $FIRMWARE_LOCAL_DIR/harsha
                     fi
 
                     if [ -f "$FIRMWARE_REPO_DIR/herk" ]; then
                         echo "Copying herk..."
-                        sudo cp $FIRMWARE_REPO_DIR/herk $FIRMWARE_LOCAL_DIR/herk
+                        cp $FIRMWARE_REPO_DIR/herk $FIRMWARE_LOCAL_DIR/herk
                     fi
                 '''
 
@@ -53,12 +52,12 @@ pipeline {
                     sh '''
                         if [ -f "$FIRMWARE_LOCAL_DIR/harsha" ]; then
                             echo "SCP harsha..."
-                            sudo scp $SCP_OPTIONS $FIRMWARE_LOCAL_DIR/harsha $DEST_USER@$DEST_HOST:$DEST_PATH
+                            scp $SCP_OPTIONS $FIRMWARE_LOCAL_DIR/harsha $DEST_USER@$DEST_HOST:$DEST_PATH
                         fi
 
                         if [ -f "$FIRMWARE_LOCAL_DIR/herk" ]; then
                             echo "SCP herk..."
-                            sudo scp $SCP_OPTIONS $FIRMWARE_LOCAL_DIR/herk $DEST_USER@$DEST_HOST:$DEST_PATH
+                            scp $SCP_OPTIONS $FIRMWARE_LOCAL_DIR/herk $DEST_USER@$DEST_HOST:$DEST_PATH
                         fi
                     '''
                 }
