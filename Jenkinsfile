@@ -36,6 +36,7 @@ pipeline {
 
                 sh '''
                     sudo mkdir -p $FIRMWARE_LOCAL_DIR
+                    sudo chown -R jenkins:jenkins $FIRMWARE_LOCAL_DIR
 
                     if [ -f "$FIRMWARE_REPO_DIR/harsha" ]; then
                         echo "Copying harsha..."
