@@ -1,16 +1,19 @@
 pipeline {
     agent any
 
+    parameters {
+        string(name: 'USERNAME', defaultValue: 'herky', description: 'Username for target server(s)')
+        text(name: 'TARGET_HOSTS', defaultValue: '10.0.0.5\n10.0.0.6', description: 'List of target server IPs (one per line)')
+        string(name: 'TARGET_PATH', defaultValue: '/opt/firmware/', description: 'Destination path on target servers')
+    }
+
     environment {
         FIRMWARE_DIR_REPO = "firmware"
-        FIRMWARE_FILE_LOCAL = "/opt/firmware"
-        DEST_USER = "user"
-        DEST_HOST = "10.0.0.5"
-        DEST_PATH = "/opt/firmware/"
+        FIRMWARE_FILE_LOCAL = "${env.WORKSPACE}/firmware"
     }
 
     triggers {
-        pollSCM('* * * * *') // every 5 minutes
+        pollSCM('* * * * *') // Poll every minute
     }
 
     stages {
@@ -40,7 +43,7 @@ pipeline {
             }
         }
 
-        stage('Download and Copy Firmware') {
+        stage('Copy Firmware Files to Target Servers') {
             when {
                 expression {
                     def changeLog = currentBuild.changeSets
@@ -56,21 +59,28 @@ pipeline {
                 }
             }
             steps {
-                sh '''
-                    sudo mkdir -p $FIRMWARE_FILE_LOCAL
-
-                    if [ -f "$FIRMWARE_DIR_REPO/harsha" ]; then
-                        echo "Copying harsha..."
-                        cp $FIRMWARE_DIR_REPO/harsha $FIRMWARE_FILE_LOCAL/harsha
-                        scp $FIRMWARE_FILE_LOCAL/harsha $DEST_USER@$DEST_HOST:$DEST_PATH
-                    fi
-
-                    if [ -f "$FIRMWARE_DIR_REPO/herk" ]; then
-                        echo "Copying herk..."
-                        cp $FIRMWARE_DIR_REPO/herk $FIRMWARE_FILE_LOCAL/herk
-                        scp $FIRMWARE_FILE_LOCAL/herk $DEST_USER@$DEST_HOST:$DEST_PATH
-                    fi
-                '''
+                sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
+                    script {
+                        def hosts = params.TARGET_HOSTS.split("\n")
+                        for (host in hosts) {
+                            host = host.trim()
+                            if (host) {
+                                if (fileExists("${FIRMWARE_DIR_REPO}/harsha")) {
+                                    sh """
+                                        echo "Transferring harsha to ${host}"
+                                        scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${FIRMWARE_DIR_REPO}/harsha ${params.USERNAME}@${host}:${params.TARGET_PATH}
+                                    """
+                                }
+                                if (fileExists("${FIRMWARE_DIR_REPO}/herk")) {
+                                    sh """
+                                        echo "Transferring herk to ${host}"
+                                        scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${FIRMWARE_DIR_REPO}/herk ${params.USERNAME}@${host}:${params.TARGET_PATH}
+                                    """
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -82,16 +92,16 @@ pipeline {
                         for (change in changeLog) {
                             for (file in change.items.collectMany { it.affectedFiles }) {
                                 if (file.path == "firmware/harsha" || file.path == "firmware/herk") {
-                                    return false // change found
+                                    return false
                                 }
                             }
                         }
-                        return true // no change found
+                        return true
                     }
                 }
             }
             steps {
-                echo "No firmware change in harsha or herk."
+                echo "No firmware changes detected."
             }
         }
     }
