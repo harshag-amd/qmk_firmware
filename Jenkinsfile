@@ -4,10 +4,13 @@ pipeline {
     environment {
         FIRMWARE_DIR_REPO = "firmware"
         FIRMWARE_FILE_LOCAL = "/opt/firmware"
+        DEST_USER = "user"
+        DEST_HOST = "10.0.0.5"
+        DEST_PATH = "/opt/firmware/"
     }
 
     triggers {
-        pollSCM('H/5 * * * *')
+        pollSCM() // every 5 minutes
     }
 
     stages {
@@ -17,50 +20,78 @@ pipeline {
             }
         }
 
-        stage('Copy Firmware') {
+        stage('Detect Changes') {
             when {
-                changeset {
-                    file '**/firmware/harsha'
-                    file '**/firmware/herk'
+                expression {
+                    def changeLog = currentBuild.changeSets
+                    def changed = false
+                    for (change in changeLog) {
+                        for (file in change.items.collectMany { it.affectedFiles }) {
+                            if (file.path == "firmware/harsha" || file.path == "firmware/herk") {
+                                changed = true
+                            }
+                        }
+                    }
+                    return changed
+                }
+            }
+            steps {
+                echo "Firmware change detected"
+            }
+        }
+
+        stage('Download and Copy Firmware') {
+            when {
+                expression {
+                    def changeLog = currentBuild.changeSets
+                    def changed = false
+                    for (change in changeLog) {
+                        for (file in change.items.collectMany { it.affectedFiles }) {
+                            if (file.path == "firmware/harsha" || file.path == "firmware/herk") {
+                                changed = true
+                            }
+                        }
+                    }
+                    return changed
                 }
             }
             steps {
                 sh '''
                     mkdir -p $FIRMWARE_FILE_LOCAL
-                    cp $FIRMWARE_DIR_REPO/harsha $FIRMWARE_FILE_LOCAL/harsha 2>/dev/null || true
-                    cp $FIRMWARE_DIR_REPO/herk $FIRMWARE_FILE_LOCAL/herk 2>/dev/null || true
-                    echo "Firmware files copied to $FIRMWARE_FILE_LOCAL"
+
+                    if [ -f "$FIRMWARE_DIR_REPO/harsha" ]; then
+                        echo "Copying harsha..."
+                        cp $FIRMWARE_DIR_REPO/harsha $FIRMWARE_FILE_LOCAL/harsha
+                        scp $FIRMWARE_FILE_LOCAL/harsha $DEST_USER@$DEST_HOST:$DEST_PATH
+                    fi
+
+                    if [ -f "$FIRMWARE_DIR_REPO/herk" ]; then
+                        echo "Copying herk..."
+                        cp $FIRMWARE_DIR_REPO/herk $FIRMWARE_FILE_LOCAL/herk
+                        scp $FIRMWARE_FILE_LOCAL/herk $DEST_USER@$DEST_HOST:$DEST_PATH
+                    fi
                 '''
             }
         }
 
-        stage('Flash Firmware') {
-            when {
-                changeset {
-                    file '**/firmware/harsha'
-                    file '**/firmware/herk'
-                }
-            }
-            steps {
-                sh '''
-                    chmod +x /usr/local/bin/flash_apu.sh
-                    /usr/local/bin/flash_apu.sh $FIRMWARE_FILE_LOCAL/harsha || true
-                    /usr/local/bin/flash_apu.sh $FIRMWARE_FILE_LOCAL/herk || true
-                '''
-            }
-        }
-
-        stage('No Firmware Change') {
+        stage('No Change Detected') {
             when {
                 not {
-                    changeset {
-                        file '**/firmware/harsha'
-                        file '**/firmware/herk'
+                    expression {
+                        def changeLog = currentBuild.changeSets
+                        for (change in changeLog) {
+                            for (file in change.items.collectMany { it.affectedFiles }) {
+                                if (file.path == "firmware/harsha" || file.path == "firmware/herk") {
+                                    return false // change found
+                                }
+                            }
+                        }
+                        return true // no change found
                     }
                 }
             }
             steps {
-                echo "No firmware update (harsha/herk) detected — skipping flash."
+                echo "No firmware change in harsha or herk."
             }
         }
     }
