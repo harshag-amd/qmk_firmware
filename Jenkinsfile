@@ -61,13 +61,13 @@ pipeline {
 
                     if [ -f "$FIRMWARE_DIR_REPO/harsha" ]; then
                         echo "Copying harsha..."
-                        cp $FIRMWARE_DIR_REPO/harsha $FIRMWARE_FILE_LOCAL/harsha
+                        sudo cp $FIRMWARE_DIR_REPO/harsha $FIRMWARE_FILE_LOCAL/harsha
                         scp $FIRMWARE_FILE_LOCAL/harsha $DEST_USER@$DEST_HOST:$DEST_PATH
                     fi
 
                     if [ -f "$FIRMWARE_DIR_REPO/herk" ]; then
                         echo "Copying herk..."
-                        cp $FIRMWARE_DIR_REPO/herk $FIRMWARE_FILE_LOCAL/herk
+                        sudo cp $FIRMWARE_DIR_REPO/herk $FIRMWARE_FILE_LOCAL/herk
                         scp $FIRMWARE_FILE_LOCAL/herk $DEST_USER@$DEST_HOST:$DEST_PATH
                     fi
                 '''
