@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         FIRMWARE_REPO_DIR = "firmware"
-        FIRMWARE_LOCAL_DIR = "/opt/firmware"
+        FIRMWARE_LOCAL_DIR = "/Downloads/firmware"
         DEST_USER = "herky"
         DEST_HOST = "10.86.22.146"
         DEST_PATH = "/opt/firmware"
