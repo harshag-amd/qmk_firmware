@@ -96,13 +96,13 @@ pipeline {
 
                         switch (params.PKG_MANAGER) {
                             case "apt":
-                                updateCmd = "sudo -S apt update -y && sudo -S apt upgrade -y"
+                                updateCmd = "sudo -S apt update -y"
                                 break
                             case "dnf":
-                                updateCmd = "sudo dnf -S update -y"
+                                updateCmd = "sudo -S dnf update -y"
                                 break
                             case "yum":
-                                updateCmd = "sudo yum -S update -y"
+                                updateCmd = "sudo -S yum update -y"
                                 break
                         }
 
