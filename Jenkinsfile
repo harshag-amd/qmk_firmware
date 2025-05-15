@@ -56,33 +56,34 @@ pipeline {
             }
         }
 
-        stage('Copy Changed Firmware Files') {
-            when {
-                expression { return env.CHANGED_FILES?.trim() }
-            }
-            steps {
-                sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
-                    script {
-                        def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
-                        def changedFiles = env.CHANGED_FILES.split(",").collect { it.trim() }
+		stage('Copy Changed Files') {
+		    when {
+		        expression { return env.CHANGED_FILES?.trim() }
+		    }
+		    steps {
+		        sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
+		            script {
+		                def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
+		                def changedFiles = env.CHANGED_FILES.split(",").collect { it.trim() }
+		
+		                for (host in hosts) {
+		                    for (file in changedFiles) {
+		                        if (fileExists(file)) {
+		                            def filename = file.tokenize("/").last()
+		                            sh """
+		                                echo "Copying ${file} to ${host}..."
+		                                scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${file} ${params.USERNAME}@${host}:${params.TARGET_PATH}/${filename}
+		                            """
+		                        } else {
+		                            echo "Warning: ${file} not found in workspace."
+		                        }
+		                    }
+		                }
+		            }
+		        }
+		    }
+		}
 
-                        for (host in hosts) {
-                            for (file in changedFiles) {
-                                def filePath = "${FIRMWARE_DIR_REPO}/${file}"
-                                if (fileExists(filePath)) {
-                                    sh """
-                                        echo "Copying ${file} to ${host}..."
-                                        scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${filePath} ${params.USERNAME}@${host}:${params.TARGET_PATH}
-                                    """
-                                } else {
-                                    echo "Warning: ${filePath} not found."
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
 
         stage('Update Servers') {
             when {
