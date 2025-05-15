@@ -34,27 +34,24 @@ pipeline {
             steps {
                 script {
                     def changeLog = currentBuild.changeSets
-                    def monitoredFiles = params.FIRMWARE_FILES.split("\n").collect { it.trim() }.findAll { it }
-                    def changedFiles = []
-
+                    def changedFiles = [] as Set
+        
                     for (change in changeLog) {
                         for (file in change.items.collectMany { it.affectedFiles }) {
-                            def fileName = file.path.replaceFirst("^firmware/", "")
-                            if (monitoredFiles.contains(fileName)) {
-                                changedFiles << fileName
-                            }
+                            changedFiles << file.path
                         }
                     }
-
+        
                     env.CHANGED_FILES = changedFiles.join(",")
                     if (changedFiles.isEmpty()) {
-                        echo "No monitored firmware files changed."
+                        echo "No files changed."
                     } else {
                         echo "Detected changes in: ${env.CHANGED_FILES}"
                     }
                 }
             }
         }
+
 
 		stage('Copy Changed Files') {
 		    when {
