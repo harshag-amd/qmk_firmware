@@ -109,7 +109,7 @@ pipeline {
                         for (host in hosts) {
                             sh """
                                 echo "Running ${params.PKG_MANAGER} update on ${host}..."
-                                ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${params.USERNAME}@${host} '${updateCmd}'
+                                echo 'w' | ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${params.USERNAME}@${host} '${updateCmd}'
                             """
                         }
                     }
