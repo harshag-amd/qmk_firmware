@@ -24,12 +24,6 @@ pipeline {
             }
         }
 
-        stage('Checkout') {
-            steps {
-                git url: 'https://github.com/harshag-amd/qmk_firmware.git', branch: 'master'
-            }
-        }
-
         stage('Detect Changes') {
             steps {
                 script {
