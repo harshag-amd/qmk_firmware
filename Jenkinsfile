@@ -5,7 +5,12 @@ pipeline {
         string(name: 'USERNAME', defaultValue: 'herky', description: 'Username for target server(s)')
         text(name: 'TARGET_HOSTS', defaultValue: '10.86.22.146', description: 'List of target server IPs (one per line)')
         string(name: 'TARGET_PATH', defaultValue: '/opt/firmware/', description: 'Destination path on target servers')
+        text(name: 'ALLOWED_EXTENSIONS', defaultValue: '.h\n.c\n.bin', description: 'Allowed file extensions (one per line)')
         choice(name: 'PKG_MANAGER', choices: ['apt', 'dnf', 'yum'], description: 'Package manager to run system update')
+    }
+
+    environment {
+        FIRMWARE_DIR_REPO = "firmware"
     }
 
     triggers {
@@ -13,7 +18,7 @@ pipeline {
     }
 
     stages {
-        stage('Declarative: Pipeline Initializing') {
+        stage('Pipeline Initializing') {
             steps {
                 echo 'Pipeline initialized.'
             }
@@ -24,6 +29,11 @@ pipeline {
                 script {
                     def changeLog = currentBuild.changeSets
                     def changedFiles = [] as Set
+                    def matchedFiles = [] as Set
+                    def ipBlocks = [] as Set
+                    def products = [] as Set
+
+                    def extensions = params.ALLOWED_EXTENSIONS.split("\n").collect { it.trim() }
 
                     for (change in changeLog) {
                         for (file in change.items.collectMany { it.affectedFiles }) {
@@ -31,11 +41,32 @@ pipeline {
                         }
                     }
 
-                    env.CHANGED_FILES = changedFiles.join(",")
-                    if (changedFiles.isEmpty()) {
-                        echo "No files changed."
+                    for (file in changedFiles) {
+                        for (ext in extensions) {
+                            if (file.endsWith(ext) && file.contains("ip_fw/")) {
+                                matchedFiles << file
+
+                                // Match ip_fw/<ip_block>/<product>/...
+                                def matcher = file =~ /ip_fw\/([^\/]+)\/([^\/]+)\//
+                                if (matcher.find()) {
+                                    ipBlocks << matcher.group(1)
+                                    products << matcher.group(2)
+                                }
+                                break
+                            }
+                        }
+                    }
+
+                    env.MATCHED_FILES = matchedFiles.join(",")
+                    env.IP_BLOCKS = ipBlocks.join(",")
+                    env.PRODUCTS = products.join(",")
+
+                    if (matchedFiles.isEmpty()) {
+                        echo "No relevant changes found."
                     } else {
-                        echo "Detected changes in: ${env.CHANGED_FILES}"
+                        echo "Matched files:\n${matchedFiles.join('\n')}"
+                        echo "IP blocks: ${ipBlocks.join(', ')}"
+                        echo "Products: ${products.join(', ')}"
                     }
                 }
             }
@@ -43,13 +74,13 @@ pipeline {
 
         stage('Copy Changed Files') {
             when {
-                expression { return env.CHANGED_FILES?.trim() }
+                expression { return env.MATCHED_FILES?.trim() }
             }
             steps {
                 sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
                     script {
                         def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
-                        def changedFiles = env.CHANGED_FILES.split(",").collect { it.trim() }
+                        def changedFiles = env.MATCHED_FILES.split(",").collect { it.trim() }
 
                         for (host in hosts) {
                             for (file in changedFiles) {
@@ -71,7 +102,7 @@ pipeline {
 
         stage('Update Servers') {
             when {
-                expression { return env.CHANGED_FILES?.trim() }
+                expression { return env.MATCHED_FILES?.trim() }
             }
             steps {
                 sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
@@ -105,11 +136,11 @@ pipeline {
         stage('No Change Detected') {
             when {
                 not {
-                    expression { return env.CHANGED_FILES?.trim() }
+                    expression { return env.MATCHED_FILES?.trim() }
                 }
             }
             steps {
-                echo "No file changes detected. Skipping copy and update stages."
+                echo "No matching firmware changes detected. Skipping copy and update stages."
             }
         }
     }
