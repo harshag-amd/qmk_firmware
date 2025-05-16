@@ -7,31 +7,38 @@ pipeline {
         string(name: 'TARGET_PATH', defaultValue: '/opt/firmware/', description: 'Destination path on target servers')
         text(name: 'ALLOWED_EXTENSIONS', defaultValue: '.h\n.c\n.cpp\n.bin', description: 'Allowed file extensions (one per line)')
         choice(name: 'PKG_MANAGER', choices: ['apt', 'dnf', 'yum'], description: 'Package manager to run system update')
-        string(name: 'REPO_DIR', defaultValue: '.', description: 'Subdirectory where repo is checked out (e.g., ip_fw or .)')
-        text(name: 'PRODUCT_LIST', defaultValue: 'arden\nnavi\nkracken\nraphael\nremambrant', description: 'Valid products to match in paths')
+        string(name: 'GIT_REPO_URL', defaultValue: '', description: 'Git repository URL (SSH format)')
+        string(name: 'GIT_BRANCH', defaultValue: 'amd/main', description: 'Git branch to track')
+        string(name: 'REPO_DIR', defaultValue: 'repo', description: 'Local directory name for repo clone')
+        text(name: 'PRODUCT_LIST', defaultValue: 'arden\nnavi\nkraken\nraphael\nrembrandt', description: 'List of valid products to check in paths')
     }
 
     environment {
         MATCHED_FILES = ''
         PRODUCTS = ''
+        REPO_DIR_PATH = "${WORKSPACE}/${params.REPO_DIR}"
     }
 
     triggers {
-        pollSCM('* * * * *') // every minute
+        pollSCM('H/5 * * * *') // Poll every 5 minutes (adjust as needed)
     }
 
     stages {
         stage('Detect Changes') {
             steps {
-                dir(params.REPO_DIR) {
+                dir(env.REPO_DIR_PATH) {
                     script {
+                        // Get the latest commit hash
                         def latestCommit = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
                         echo "Latest Commit: ${latestCommit}"
 
-                        def changedFiles = sh(
+                        // Get changed files in the latest commit only
+                        def changedFilesRaw = sh(
                             script: "git diff-tree --no-commit-id --name-only -r ${latestCommit}",
                             returnStdout: true
-                        ).trim().split("\n").findAll { it }
+                        ).trim()
+
+                        def changedFiles = changedFilesRaw ? changedFilesRaw.split("\n").findAll { it } : []
 
                         echo "Changed files:\n${changedFiles.join('\n')}"
 
@@ -42,7 +49,9 @@ pipeline {
                         def foundProducts = [] as Set
 
                         for (file in changedFiles) {
-                            if (!extensions.any { file.endsWith(it) }) continue
+                            if (!extensions.any { file.endsWith(it) }) {
+                                continue
+                            }
                             def matchedProduct = products.find { product -> file.contains("/${product}/") }
                             if (matchedProduct) {
                                 matched << file
@@ -50,15 +59,16 @@ pipeline {
                             }
                         }
 
-                        env.MATCHED_FILES = matched.join(',')
-                        env.PRODUCTS = foundProducts.join(',')
-
-                        if (matched) {
+                        if (matched.isEmpty()) {
+                            echo "No matching changes found."
+                        } else {
                             echo "Matched Files:\n${matched.join('\n')}"
                             echo "Detected Products: ${foundProducts.join(', ')}"
-                        } else {
-                            echo "No matching changes."
                         }
+
+                        // Save matched files and products to env variables for use in later stages
+                        env.MATCHED_FILES = matched.join(',')
+                        env.PRODUCTS = foundProducts.join(',')
                     }
                 }
             }
@@ -69,25 +79,22 @@ pipeline {
                 expression { return env.MATCHED_FILES?.trim() }
             }
             steps {
-                dir(params.REPO_DIR) {
-                    sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
+                dir(env.REPO_DIR_PATH) {
+                    sshagent(credentials: ['jenkins-id']) {
                         script {
                             def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
-                            def files = env.MATCHED_FILES.split(',').collect { it.trim() }
+                            def filesToCopy = env.MATCHED_FILES.split(",").collect { it.trim() }
 
                             for (host in hosts) {
-                                for (file in files) {
-                                    // Make sure directory structure exists
-                                    def fullPath = "${params.REPO_DIR}/${file}".replaceFirst('^\\./', '')
-
+                                for (file in filesToCopy) {
                                     if (fileExists(file)) {
-                                        echo "Copying file ${file} to ${host}"
-                                        def filename = file.tokenize('/').last()
+                                        def filename = file.tokenize("/").last()
                                         sh """
-                                            scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null '${file}' ${params.USERNAME}@${host}:${params.TARGET_PATH}/${filename}
+                                            echo "Copying file ${file} to ${host}:${params.TARGET_PATH} ..."
+                                            scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${file} ${params.USERNAME}@${host}:${params.TARGET_PATH}/${filename}
                                         """
                                     } else {
-                                        echo "ERROR: File ${file} does not exist in ${params.REPO_DIR}"
+                                        echo "Warning: file ${file} not found on workspace."
                                     }
                                 }
                             }
@@ -109,20 +116,22 @@ pipeline {
 
                         switch (params.PKG_MANAGER) {
                             case "apt":
-                                updateCmd = "sudo -S apt update -y"
+                                updateCmd = "sudo apt update -y"
                                 break
                             case "dnf":
-                                updateCmd = "sudo -S dnf update -y"
+                                updateCmd = "sudo dnf update -y"
                                 break
                             case "yum":
-                                updateCmd = "sudo -S yum update -y"
+                                updateCmd = "sudo yum update -y"
                                 break
+                            default:
+                                error("Unsupported package manager: ${params.PKG_MANAGER}")
                         }
 
                         for (host in hosts) {
                             sh """
                                 echo "Running ${params.PKG_MANAGER} update on ${host}..."
-                                ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${params.USERNAME}@${host} "${updateCmd}" <<< 'w'
+                                ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${params.USERNAME}@${host} "${updateCmd}"
                             """
                         }
                     }
@@ -137,7 +146,7 @@ pipeline {
                 }
             }
             steps {
-                echo "No matching files changed. Skipping file transfer and server update."
+                echo "No relevant changes detected. Skipping file copy and server update."
             }
         }
     }
