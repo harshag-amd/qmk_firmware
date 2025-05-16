@@ -5,23 +5,22 @@ pipeline {
         string(name: 'USERNAME', defaultValue: 'herky', description: 'Username for target server(s)')
         text(name: 'TARGET_HOSTS', defaultValue: '10.86.22.146', description: 'List of target server IPs (one per line)')
         string(name: 'TARGET_PATH', defaultValue: '/opt/firmware/', description: 'Destination path on target servers')
-        text(name: 'ALLOWED_EXTENSIONS', defaultValue: '.h\n.c\n.bin', description: 'Allowed file extensions (one per line)')
+        text(name: 'ALLOWED_EXTENSIONS', defaultValue: '.h\n.c\n.cpp\n.bin', description: 'Allowed file extensions (one per line)')
         choice(name: 'PKG_MANAGER', choices: ['apt', 'dnf', 'yum'], description: 'Package manager to run system update')
-        string(name: 'GIT_REPO_URL', defaultValue: 'git@github.com:harshag-amd/qmk_firmware.git', description: 'Git repository URL')
-        string(name: 'GIT_BRANCH', defaultValue: 'master', description: 'Git branch to track')
-        string(name: 'REPO_DIR', defaultValue: 'qmk_firmware', description: 'Subdirectory name for Git clone')
+        string(name: 'GIT_REPO_URL', defaultValue: 'git@github.amd.com:AMD-Radeon-Driver/drivers.git', description: 'Git repository URL (SSH format)')
+        string(name: 'GIT_BRANCH', defaultValue: 'amd/main', description: 'Git branch to track')
+        string(name: 'REPO_DIR', defaultValue: '.', description: 'Subdirectory to monitor for file changes (e.g., ip_fw or . for root)')
+        text(name: 'PRODUCT_LIST', defaultValue: 'arden\nnavi\nkraken\nraphael\nrembrandt', description: 'List of valid products to check in paths')
     }
 
     environment {
         MATCHED_FILES = ''
-        IP_BLOCKS = ''
         PRODUCTS = ''
-        REPO_DIR_PATH = "${WORKSPACE}/${params.REPO_DIR}"
-        COMMIT_TRACK_FILE = "${WORKSPACE}/.jenkins_commit"
+        REPO_DIR_PATH = "${WORKSPACE}/repo"
     }
 
     triggers {
-        pollSCM('* * * * *') // every minute
+        pollSCM('* * * * *') // Poll every minute
     }
 
     stages {
@@ -29,49 +28,41 @@ pipeline {
             steps {
                 dir(env.REPO_DIR_PATH) {
                     script {
-                        def extensions = params.ALLOWED_EXTENSIONS.split("\n").collect { it.trim() }.findAll { it }
-                        def previousCommit = fileExists(env.COMMIT_TRACK_FILE) ? readFile(env.COMMIT_TRACK_FILE).trim() : ''
-                        def currentCommit = sh(script: "git rev-parse HEAD", returnStdout: true).trim()
-                        def changedFiles = []
+                        def previousCommit = sh(script: 'git rev-parse HEAD~1', returnStdout: true).trim()
+                        def currentCommit = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
 
-                        if (previousCommit) {
-                            echo "Comparing commits: ${previousCommit} -> ${currentCommit}"
-                            changedFiles = sh(script: "git diff --name-only ${previousCommit} ${currentCommit}", returnStdout: true).trim().split("\n")
-                        } else {
-                            echo "First run or no previous commit found. Using current commit only."
-                            changedFiles = sh(script: "git diff-tree --no-commit-id --name-only -r ${currentCommit}", returnStdout: true).trim().split("\n")
-                        }
+                        echo "Comparing changes from ${previousCommit} to ${currentCommit}"
+                        def diffOutput = sh(
+                            script: "git diff --name-only ${previousCommit} ${currentCommit}",
+                            returnStdout: true
+                        ).trim()
 
-                        writeFile(file: env.COMMIT_TRACK_FILE, text: currentCommit)
+                        def changedFiles = diffOutput.split("\n").findAll { it } as Set
+                        def extensions = params.ALLOWED_EXTENSIONS.split("\n").collect { it.trim() }
+                        def productList = params.PRODUCT_LIST.split("\n").collect { it.trim() }
 
                         def matchedFiles = [] as Set
-                        def ipBlocks = [] as Set
-                        def products = [] as Set
+                        def detectedProducts = [] as Set
 
                         for (file in changedFiles) {
-                            for (ext in extensions) {
-                                if (file.endsWith(ext)) {
-                                    matchedFiles << file
+                            def matchesExtension = extensions.any { file.endsWith(it) }
+                            if (!matchesExtension) continue
 
-                                    def matcher = file =~ /([^\\/]+)\\/([^\\/]+)\\//
-                                    if (matcher.find()) {
-                                        ipBlocks << matcher.group(1)
-                                        products << matcher.group(2)
-                                    }
-                                    break
-                                }
+                            def foundProduct = productList.find { product -> file.contains("/${product}/") }
+                            if (foundProduct) {
+                                matchedFiles << file
+                                detectedProducts << foundProduct
                             }
                         }
 
                         env.MATCHED_FILES = matchedFiles.join(",")
-                        env.IP_BLOCKS = ipBlocks.join(",")
-                        env.PRODUCTS = products.join(",")
+                        env.PRODUCTS = detectedProducts.join(",")
 
                         if (matchedFiles.isEmpty()) {
-                            echo "No relevant firmware file changes found."
+                            echo "No matching changes found."
                         } else {
-                            echo "Detected changed firmware files:"
-                            matchedFiles.each { echo "- ${it}" }
+                            echo "Matched files:\n${matchedFiles.join('\n')}"
+                            echo "Detected products: ${detectedProducts.join(', ')}"
                         }
                     }
                 }
@@ -83,22 +74,23 @@ pipeline {
                 expression { return env.MATCHED_FILES?.trim() }
             }
             steps {
-                sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
-                    script {
-                        def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
-                        def changedFiles = env.MATCHED_FILES.split(",").collect { it.trim() }
+                dir(env.REPO_DIR_PATH) {
+                    sshagent(credentials: ['jenkins-id']) {
+                        script {
+                            def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
+                            def filesToSend = env.MATCHED_FILES.split(",").collect { it.trim() }
 
-                        for (host in hosts) {
-                            for (file in changedFiles) {
-                                def fullPath = "${env.REPO_DIR_PATH}/${file}"
-                                if (fileExists(fullPath)) {
-                                    def filename = file.tokenize("/").last()
-                                    echo "Copying ${fullPath} to ${host}:${params.TARGET_PATH}/${filename}"
-                                    sh """
-                                        scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "${fullPath}" ${params.USERNAME}@${host}:${params.TARGET_PATH}/${filename}
-                                    """
-                                } else {
-                                    echo "WARNING: File not found: ${fullPath}"
+                            for (host in hosts) {
+                                for (file in filesToSend) {
+                                    if (fileExists(file)) {
+                                        def filename = file.tokenize("/").last()
+                                        sh """
+                                            echo "Copying ${file} to ${host}..."
+                                            scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${file} ${params.USERNAME}@${host}:${params.TARGET_PATH}/${filename}
+                                        """
+                                    } else {
+                                        echo "Warning: ${file} not found."
+                                    }
                                 }
                             }
                         }
@@ -112,9 +104,9 @@ pipeline {
                 expression { return env.MATCHED_FILES?.trim() }
             }
             steps {
-                sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
+                sshagent(credentials: ['jenkins-id']) {
                     script {
-                        def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
+                        def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }
                         def updateCmd = ""
 
                         switch (params.PKG_MANAGER) {
@@ -130,8 +122,8 @@ pipeline {
                         }
 
                         for (host in hosts) {
-                            echo "Updating ${host} using ${params.PKG_MANAGER}..."
                             sh """
+                                echo "Running ${params.PKG_MANAGER} update on ${host}..."
                                 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${params.USERNAME}@${host} "${updateCmd}" <<< 'w'
                             """
                         }
@@ -147,7 +139,7 @@ pipeline {
                 }
             }
             steps {
-                echo "No matching firmware changes detected. Skipping copy and update stages."
+                echo "No relevant changes detected. Skipping file transfer and update."
             }
         }
     }
