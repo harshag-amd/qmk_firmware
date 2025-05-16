@@ -25,31 +25,6 @@ pipeline {
     }
 
     stages {
-        stage('Clone or Update Repository') {
-            steps {
-                script {
-                    withCredentials([usernamePassword(credentialsId: 'github-personal-jenkins-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_TOKEN')]) {
-                        def repoDir = env.REPO_DIR_PATH
-
-                        if (fileExists(repoDir)) {
-                            echo "Repository exists, fetching updates..."
-                            dir(repoDir) {
-                                sh """
-                                    git -c credential.helper='!f() { echo username=\\$GIT_USERNAME; echo password=\\$GIT_TOKEN; }; f' fetch origin ${params.GIT_BRANCH}
-                                    git reset --hard origin/${params.GIT_BRANCH}
-                                """
-                            }
-                        } else {
-                            echo "Cloning repository..."
-                            sh """
-                                git -c credential.helper='!f() { echo username=\\$GIT_USERNAME; echo password=\\$GIT_TOKEN; }; f' clone --single-branch --branch ${params.GIT_BRANCH} ${params.GIT_REPO_URL} ${repoDir}
-                            """
-                        }
-                    }
-                }
-            }
-        }
-
         stage('Detect Changes') {
             steps {
                 dir(env.REPO_DIR_PATH) {
