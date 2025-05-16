@@ -10,7 +10,7 @@ pipeline {
         string(name: 'GIT_REPO_URL', defaultValue: 'git@github.amd.com:AMD-Radeon-Driver/drivers.git', description: 'Git repository URL (SSH format)')
         string(name: 'GIT_BRANCH', defaultValue: 'amd/main', description: 'Git branch to track')
         string(name: 'REPO_DIR', defaultValue: '.', description: 'Subdirectory to monitor for file changes (e.g., ip_fw or . for root)')
-        text(name: 'PRODUCT_LIST', defaultValue: 'arden\nnavi\nkraken\nraphael\nrembrandt', description: 'List of valid products to check in paths')
+        text(name: 'PRODUCT_LIST', defaultValue: 'arden\nnavi\nkraken\nraphael\nremambrant', description: 'List of valid products to check in paths')
     }
 
     environment {
