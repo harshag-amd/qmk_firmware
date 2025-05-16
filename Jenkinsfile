@@ -17,15 +17,7 @@ pipeline {
     }
 
     stages {
-        stage('Initialize') {
-            steps {
-                script {
-                    // Declare global variables in the Binding
-                    binding.setVariable("matchedFilesGlobal", [])
-                    binding.setVariable("detectedProductsGlobal", [])
-                }
-            }
-        }
+       
 
 
 
