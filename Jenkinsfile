@@ -4,6 +4,7 @@ pipeline {
     parameters {
         string(name: 'USERNAME', defaultValue: 'herky', description: 'Username for target server(s)')
         text(name: 'TARGET_HOSTS', defaultValue: '10.86.22.146', description: 'List of target server IPs (one per line)')
+        text(name: 'ALLOWED_EXTENSIONS', defaultValue: '.h\n.c\n.cpp', description: 'File extensions to monitor (one per line, include dot)')
         string(name: 'TARGET_PATH', defaultValue: '/opt/firmware/', description: 'Destination path on target servers')
         text(name: 'FIRMWARE_FILES', defaultValue: 'harsha\nherk', description: 'List of firmware files to monitor (one per line)')
         choice(name: 'PKG_MANAGER', choices: ['apt', 'dnf', 'yum'], description: 'Package manager to run system update')
