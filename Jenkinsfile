@@ -4,14 +4,8 @@ pipeline {
     parameters {
         string(name: 'USERNAME', defaultValue: 'herky', description: 'Username for target server(s)')
         text(name: 'TARGET_HOSTS', defaultValue: '10.86.22.146', description: 'List of target server IPs (one per line)')
-        text(name: 'ALLOWED_EXTENSIONS', defaultValue: '.h\n.c\n.cpp', description: 'File extensions to monitor (one per line, include dot)')
         string(name: 'TARGET_PATH', defaultValue: '/opt/firmware/', description: 'Destination path on target servers')
-        text(name: 'FIRMWARE_FILES', defaultValue: 'harsha\nherk', description: 'List of firmware files to monitor (one per line)')
         choice(name: 'PKG_MANAGER', choices: ['apt', 'dnf', 'yum'], description: 'Package manager to run system update')
-    }
-
-    environment {
-        FIRMWARE_DIR_REPO = "firmware"
     }
 
     triggers {
@@ -19,7 +13,7 @@ pipeline {
     }
 
     stages {
-        stage('Declarative: Pipeline Intializing') {
+        stage('Declarative: Pipeline Initializing') {
             steps {
                 echo 'Pipeline initialized.'
             }
@@ -30,13 +24,13 @@ pipeline {
                 script {
                     def changeLog = currentBuild.changeSets
                     def changedFiles = [] as Set
-        
+
                     for (change in changeLog) {
                         for (file in change.items.collectMany { it.affectedFiles }) {
                             changedFiles << file.path
                         }
                     }
-        
+
                     env.CHANGED_FILES = changedFiles.join(",")
                     if (changedFiles.isEmpty()) {
                         echo "No files changed."
@@ -47,35 +41,33 @@ pipeline {
             }
         }
 
+        stage('Copy Changed Files') {
+            when {
+                expression { return env.CHANGED_FILES?.trim() }
+            }
+            steps {
+                sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
+                    script {
+                        def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
+                        def changedFiles = env.CHANGED_FILES.split(",").collect { it.trim() }
 
-		stage('Copy Changed Files') {
-		    when {
-		        expression { return env.CHANGED_FILES?.trim() }
-		    }
-		    steps {
-		        sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
-		            script {
-		                def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
-		                def changedFiles = env.CHANGED_FILES.split(",").collect { it.trim() }
-		
-		                for (host in hosts) {
-		                    for (file in changedFiles) {
-		                        if (fileExists(file)) {
-		                            def filename = file.tokenize("/").last()
-		                            sh """
-		                                echo "Copying ${file} to ${host}..."
-		                                scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${file} ${params.USERNAME}@${host}:${params.TARGET_PATH}/${filename}
-		                            """
-		                        } else {
-		                            echo "Warning: ${file} not found in workspace."
-		                        }
-		                    }
-		                }
-		            }
-		        }
-		    }
-		}
-
+                        for (host in hosts) {
+                            for (file in changedFiles) {
+                                if (fileExists(file)) {
+                                    def filename = file.tokenize("/").last()
+                                    sh """
+                                        echo "Copying ${file} to ${host}..."
+                                        scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${file} ${params.USERNAME}@${host}:${params.TARGET_PATH}/${filename}
+                                    """
+                                } else {
+                                    echo "Warning: ${file} not found in workspace."
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         stage('Update Servers') {
             when {
@@ -117,7 +109,7 @@ pipeline {
                 }
             }
             steps {
-                echo "No firmware changes detected. Skipping copy and update stages."
+                echo "No file changes detected. Skipping copy and update stages."
             }
         }
     }
