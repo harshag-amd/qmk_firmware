@@ -7,8 +7,8 @@ pipeline {
         string(name: 'TARGET_PATH', defaultValue: '/opt/firmware/', description: 'Destination path on target servers')
         text(name: 'ALLOWED_EXTENSIONS', defaultValue: '.h\n.c\n.cpp\n.bin', description: 'Allowed file extensions (one per line)')
         choice(name: 'PKG_MANAGER', choices: ['apt', 'dnf', 'yum'], description: 'Package manager to run system update')
-        string(name: 'REPO_DIR', defaultValue: '.', description: 'Subdirectory to monitor for file changes (e.g., ip_fw or . for root)')
-        text(name: 'PRODUCT_LIST', defaultValue: 'arden\nnavi\nkracken\nraphael\nremambrant', description: 'List of valid products to check in paths')
+        string(name: 'REPO_DIR', defaultValue: '.', description: 'Subdirectory where repo is checked out (e.g., ip_fw or .)')
+        text(name: 'PRODUCT_LIST', defaultValue: 'arden\nnavi\nkracken\nraphael\nremambrant', description: 'Valid products to match in paths')
     }
 
     environment {
@@ -17,7 +17,7 @@ pipeline {
     }
 
     triggers {
-        pollSCM('* * * * *') // Poll every minute
+        pollSCM('* * * * *') // every minute
     }
 
     stages {
@@ -25,17 +25,16 @@ pipeline {
             steps {
                 dir(params.REPO_DIR) {
                     script {
-                        // Get the latest commit ID
-                        def latestCommit = sh(script: "git rev-parse HEAD", returnStdout: true).trim()
-                        echo "Latest commit ID: ${latestCommit}"
+                        def latestCommit = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
+                        echo "Latest Commit: ${latestCommit}"
 
-                        // Get the files changed in this commit
                         def changedFiles = sh(
-                            script: "git show --name-only --pretty='' ${latestCommit}",
+                            script: "git diff-tree --no-commit-id --name-only -r ${latestCommit}",
                             returnStdout: true
-                        ).trim().split("\n").collect { it.trim() }.findAll { it }
+                        ).trim().split("\n").findAll { it }
 
-                        // Filter files by extension and product folder
+                        echo "Changed files:\n${changedFiles.join('\n')}"
+
                         def extensions = params.ALLOWED_EXTENSIONS.split("\n").collect { it.trim() }
                         def products = params.PRODUCT_LIST.split("\n").collect { it.trim() }
 
@@ -51,41 +50,44 @@ pipeline {
                             }
                         }
 
-                        env.MATCHED_FILES = matched.join(",")
-                        env.PRODUCTS = foundProducts.join(",")
+                        env.MATCHED_FILES = matched.join(',')
+                        env.PRODUCTS = foundProducts.join(',')
 
-                        if (matched.isEmpty()) {
-                            echo "No matching changes found in the latest commit."
+                        if (matched) {
+                            echo "Matched Files:\n${matched.join('\n')}"
+                            echo "Detected Products: ${foundProducts.join(', ')}"
                         } else {
-                            echo "Matched files:\n${matched.join('\n')}"
-                            echo "Detected products: ${foundProducts.join(', ')}"
+                            echo "No matching changes."
                         }
                     }
                 }
             }
         }
 
-        stage('Copy Changed Files') {
+        stage('Copy Changed Files to Target') {
             when {
                 expression { return env.MATCHED_FILES?.trim() }
             }
             steps {
                 dir(params.REPO_DIR) {
-                    sshagent(credentials: ['jenkins-id']) {
+                    sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
                         script {
                             def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
-                            def filesToSend = env.MATCHED_FILES.split(",").collect { it.trim() }
+                            def files = env.MATCHED_FILES.split(',').collect { it.trim() }
 
                             for (host in hosts) {
-                                for (file in filesToSend) {
+                                for (file in files) {
+                                    // Make sure directory structure exists
+                                    def fullPath = "${params.REPO_DIR}/${file}".replaceFirst('^\\./', '')
+
                                     if (fileExists(file)) {
-                                        def filename = file.tokenize("/").last()
+                                        echo "Copying file ${file} to ${host}"
+                                        def filename = file.tokenize('/').last()
                                         sh """
-                                            echo "Copying ${file} to ${host}..."
                                             scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null '${file}' ${params.USERNAME}@${host}:${params.TARGET_PATH}/${filename}
                                         """
                                     } else {
-                                        echo "Warning: ${file} does not exist locally. Skipping."
+                                        echo "ERROR: File ${file} does not exist in ${params.REPO_DIR}"
                                     }
                                 }
                             }
@@ -128,14 +130,14 @@ pipeline {
             }
         }
 
-        stage('No Change Detected') {
+        stage('No Relevant Changes') {
             when {
                 not {
                     expression { return env.MATCHED_FILES?.trim() }
                 }
             }
             steps {
-                echo "No relevant changes detected. Skipping file transfer and update."
+                echo "No matching files changed. Skipping file transfer and server update."
             }
         }
     }
