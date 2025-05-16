@@ -32,10 +32,7 @@ pipeline {
                         def currentCommit = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
 
                         echo "Comparing changes from ${previousCommit} to ${currentCommit}"
-                        def diffOutput = sh(
-                            script: "git diff --name-only ${previousCommit} ${currentCommit}",
-                            returnStdout: true
-                        ).trim()
+                        def diffOutput = sh(script: "git diff --name-only ${previousCommit} ${currentCommit}", returnStdout: true).trim()
 
                         def changedFiles = diffOutput.split("\n").findAll { it } as Set
                         def extensions = params.ALLOWED_EXTENSIONS.split("\n").collect { it.trim() }
@@ -45,8 +42,7 @@ pipeline {
                         def detectedProducts = [] as Set
 
                         for (file in changedFiles) {
-                            def matchesExtension = extensions.any { file.endsWith(it) }
-                            if (!matchesExtension) continue
+                            if (!extensions.any { file.endsWith(it) }) continue
 
                             def foundProduct = productList.find { product -> file.contains("/${product}/") }
                             if (foundProduct) {
@@ -74,23 +70,23 @@ pipeline {
                 expression { return env.MATCHED_FILES?.trim() }
             }
             steps {
-                dir(env.REPO_DIR_PATH) {
-                    sshagent(credentials: ['jenkins-id']) {
-                        script {
-                            def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
-                            def filesToSend = env.MATCHED_FILES.split(",").collect { it.trim() }
+                sshagent(credentials: ['jenkins-id']) {
+                    script {
+                        def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }
+                        def filesToSend = env.MATCHED_FILES.split(",").collect { it.trim() }
 
-                            for (host in hosts) {
-                                for (file in filesToSend) {
-                                    if (fileExists(file)) {
-                                        def filename = file.tokenize("/").last()
-                                        sh """
-                                            echo "Copying ${file} to ${host}..."
-                                            scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${file} ${params.USERNAME}@${host}:${params.TARGET_PATH}/${filename}
-                                        """
-                                    } else {
-                                        echo "Warning: ${file} not found."
-                                    }
+                        for (host in hosts) {
+                            for (relativePath in filesToSend) {
+                                def fullPath = "${env.REPO_DIR_PATH}/${relativePath}"
+                                if (fileExists(fullPath)) {
+                                    def filename = relativePath.tokenize("/").last()
+                                    echo "Copying ${relativePath} to ${host}:${params.TARGET_PATH}/${filename}"
+                                    sh """
+                                        scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null '${fullPath}' ${params.USERNAME}@${host}:${params.TARGET_PATH}/${filename}
+                                    """
+                                } else {
+                                    echo "Warning: File not found: ${fullPath}"
+                                    sh "ls -l '${fullPath}' || echo 'File does not exist'"
                                 }
                             }
                         }
@@ -122,8 +118,8 @@ pipeline {
                         }
 
                         for (host in hosts) {
+                            echo "Running ${params.PKG_MANAGER} update on ${host}"
                             sh """
-                                echo "Running ${params.PKG_MANAGER} update on ${host}..."
                                 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${params.USERNAME}@${host} "${updateCmd}" <<< 'w'
                             """
                         }
