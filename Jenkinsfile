@@ -7,66 +7,105 @@ pipeline {
         string(name: 'TARGET_PATH', defaultValue: '/opt/firmware/', description: 'Destination path on target servers')
         text(name: 'ALLOWED_EXTENSIONS', defaultValue: '.h\n.c\n.bin', description: 'Allowed file extensions (one per line)')
         choice(name: 'PKG_MANAGER', choices: ['apt', 'dnf', 'yum'], description: 'Package manager to run system update')
+        string(name: 'GIT_REPO_URL', defaultValue: 'git@github.com:harshag-amd/qmk_firmware.git', description: 'Git repository URL')
+        string(name: 'GIT_BRANCH', defaultValue: 'master', description: 'Git branch to track')
+        string(name: 'REPO_DIR', defaultValue: '.', description: 'Subdirectory to monitor for file changes (e.g., ip_fw or . for root)')
     }
 
     environment {
-        FIRMWARE_DIR_REPO = "firmware"
+        MATCHED_FILES = ''
+        IP_BLOCKS = ''
+        PRODUCTS = ''
+        REPO_DIR_PATH = "${WORKSPACE}/repo"
+        COMMIT_TRACK_FILE = "${WORKSPACE}/.jenkins_commit"
     }
 
+    // Enable polling (will only trigger if scm is declared)
     triggers {
-        pollSCM('* * * * *') // Every minute
+        pollSCM('* * * * *') // every minute
     }
+
+    // Required for pollSCM to work, although actual clone is manual
+
 
     stages {
-        stage('Pipeline Initializing') {
+        stage('Clone or Update Repository') {
             steps {
-                echo 'Pipeline initialized.'
+                script {
+                    withCredentials([usernamePassword(credentialsId: 'github-personal-jenkins-id', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_TOKEN')]) {
+                        def repoDir = env.REPO_DIR_PATH
+
+                        if (fileExists(repoDir)) {
+                            echo "Repository exists, fetching updates..."
+                            dir(repoDir) {
+                                sh """
+                                    git -c credential.helper='!f() { echo username=\\$GIT_USERNAME; echo password=\\$GIT_TOKEN; }; f' fetch origin ${params.GIT_BRANCH}
+                                    git reset --hard origin/${params.GIT_BRANCH}
+                                """
+                            }
+                        } else {
+                            echo "Cloning repository..."
+                            sh """
+                                git -c credential.helper='!f() { echo username=\\$GIT_USERNAME; echo password=\\$GIT_TOKEN; }; f' clone --single-branch --branch ${params.GIT_BRANCH} ${params.GIT_REPO_URL} ${repoDir}
+                            """
+                        }
+                    }
+                }
             }
         }
 
         stage('Detect Changes') {
             steps {
-                script {
-                    def changeLog = currentBuild.changeSets
-                    def changedFiles = [] as Set
-                    def matchedFiles = [] as Set
-                    def ipBlocks = [] as Set
-                    def products = [] as Set
+                dir(env.REPO_DIR_PATH) {
+                    script {
+                        def extensions = params.ALLOWED_EXTENSIONS.split("\n").collect { it.trim() }.findAll { it }
+                        def watchDir = params.REPO_DIR == '.' ? '' : params.REPO_DIR + '/'
 
-                    def extensions = params.ALLOWED_EXTENSIONS.split("\n").collect { it.trim() }
+                        def previousCommit = fileExists(env.COMMIT_TRACK_FILE) ? readFile(env.COMMIT_TRACK_FILE).trim() : ''
+                        def currentCommit = sh(script: "git rev-parse HEAD", returnStdout: true).trim()
 
-                    for (change in changeLog) {
-                        for (file in change.items.collectMany { it.affectedFiles }) {
-                            changedFiles << file.path
+                        def changedFiles = []
+                        if (previousCommit) {
+                            echo "Comparing commits: ${previousCommit} -> ${currentCommit}"
+                            changedFiles = sh(script: "git diff --name-only ${previousCommit} ${currentCommit}", returnStdout: true).trim().split("\n")
+                        } else {
+                            echo "First run or no previous commit found. Using current commit only."
+                            changedFiles = sh(script: "git diff-tree --no-commit-id --name-only -r ${currentCommit}", returnStdout: true).trim().split("\n")
                         }
-                    }
 
-                    for (file in changedFiles) {
-                        for (ext in extensions) {
-                            if (file.endsWith(ext) && file.contains("ip_fw/")) {
-                                matchedFiles << file
+                        // Save current commit for next run
+                        writeFile(file: env.COMMIT_TRACK_FILE, text: currentCommit)
 
-                                // Match ip_fw/<ip_block>/<product>/...
-                                def matcher = file =~ /ip_fw\/([^\/]+)\/([^\/]+)\//
-                                if (matcher.find()) {
-                                    ipBlocks << matcher.group(1)
-                                    products << matcher.group(2)
+                        def matchedFiles = [] as Set
+                        def ipBlocks = [] as Set
+                        def products = [] as Set
+
+                        for (file in changedFiles) {
+                            for (ext in extensions) {
+                                if (file.endsWith(ext) && (watchDir.empty || file.startsWith(watchDir))) {
+                                    matchedFiles << file
+
+                                    def relativePath = file.replaceFirst("^${watchDir}", '')
+                                    def matcher = relativePath =~ /([^\\/]+)\\/([^\\/]+)\\//
+                                    if (matcher.find()) {
+                                        ipBlocks << matcher.group(1)
+                                        products << matcher.group(2)
+                                    }
+                                    break
                                 }
-                                break
                             }
                         }
-                    }
 
-                    env.MATCHED_FILES = matchedFiles.join(",")
-                    env.IP_BLOCKS = ipBlocks.join(",")
-                    env.PRODUCTS = products.join(",")
+                        env.MATCHED_FILES = matchedFiles.join(",")
+                        env.IP_BLOCKS = ipBlocks.join(",")
+                        env.PRODUCTS = products.join(",")
 
-                    if (matchedFiles.isEmpty()) {
-                        echo "No relevant changes found."
-                    } else {
-                        echo "Matched files:\n${matchedFiles.join('\n')}"
-                        echo "IP blocks: ${ipBlocks.join(', ')}"
-                        echo "Products: ${products.join(', ')}"
+                        if (matchedFiles.isEmpty()) {
+                            echo "No relevant firmware file changes found."
+                        } else {
+                            echo "Detected changed firmware files:"
+                            matchedFiles.each { echo "- ${it}" }
+                        }
                     }
                 }
             }
@@ -77,21 +116,23 @@ pipeline {
                 expression { return env.MATCHED_FILES?.trim() }
             }
             steps {
-                sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
-                    script {
-                        def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
-                        def changedFiles = env.MATCHED_FILES.split(",").collect { it.trim() }
+                dir(env.REPO_DIR_PATH) {
+                    sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
+                        script {
+                            def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
+                            def changedFiles = env.MATCHED_FILES.split(",").collect { it.trim() }
 
-                        for (host in hosts) {
-                            for (file in changedFiles) {
-                                if (fileExists(file)) {
-                                    def filename = file.tokenize("/").last()
-                                    sh """
-                                        echo "Copying ${file} to ${host}..."
-                                        scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${file} ${params.USERNAME}@${host}:${params.TARGET_PATH}/${filename}
-                                    """
-                                } else {
-                                    echo "Warning: ${file} not found in workspace."
+                            for (host in hosts) {
+                                for (file in changedFiles) {
+                                    if (fileExists(file)) {
+                                        def filename = file.tokenize("/").last()
+                                        sh """
+                                            echo "Copying ${file} to ${host}..."
+                                            scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${file} ${params.USERNAME}@${host}:${params.TARGET_PATH}/${filename}
+                                        """
+                                    } else {
+                                        echo "Warning: ${file} not found in workspace."
+                                    }
                                 }
                             }
                         }
@@ -125,7 +166,7 @@ pipeline {
                         for (host in hosts) {
                             sh """
                                 echo "Running ${params.PKG_MANAGER} update on ${host}..."
-                                echo 'w' | ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${params.USERNAME}@${host} '${updateCmd}'
+                                ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${params.USERNAME}@${host} "${updateCmd}" <<< 'w'
                             """
                         }
                     }
