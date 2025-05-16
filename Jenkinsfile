@@ -10,21 +10,23 @@ pipeline {
         string(name: 'GIT_REPO_URL', defaultValue: 'git@github.amd.com:AMD-Radeon-Driver/drivers.git', description: 'Git repository URL (SSH format)')
         string(name: 'GIT_BRANCH', defaultValue: 'amd/main', description: 'Git branch to track')
         string(name: 'REPO_DIR', defaultValue: '.', description: 'Subdirectory to monitor for file changes (e.g., ip_fw or . for root)')
-        text(name: 'PRODUCT_LIST', defaultValue: 'arden\nnavi\nkraken\nraphael\nrembrandt', description: 'List of valid products to check in paths')
+        text(name: 'PRODUCT_LIST', defaultValue: 'arden\nnavi\nkracken\nraphael\nremambrant', description: 'List of valid products to check in paths')
     }
 
     environment {
-        MATCHED_FILES = ''
-        PRODUCTS = ''
         REPO_DIR_PATH = "${WORKSPACE}/${params.REPO_DIR}"
     }
 
+    // Groovy variables to hold matched files and products
+    // These are accessible across stages for condition checks
+    def matchedFilesGlobal = []
+    def detectedProductsGlobal = []
+
     triggers {
-        pollSCM('* * * * *') // Poll every minute
+        pollSCM('* * * * *')
     }
 
     stages {
-
         stage('Detect Changes') {
             steps {
                 dir(env.REPO_DIR_PATH) {
@@ -51,7 +53,6 @@ pipeline {
                                 continue
                             }
 
-                            // Match product anywhere in the file path, case-insensitive
                             def matchedProduct = products.find { product -> file.toLowerCase().contains(product) }
                             if (matchedProduct) {
                                 matchedFiles << file
@@ -59,15 +60,14 @@ pipeline {
                             }
                         }
 
-                        if (matchedFiles.isEmpty()) {
+                        matchedFilesGlobal = matchedFiles as List
+                        detectedProductsGlobal = detectedProducts as List
+
+                        if (matchedFilesGlobal.isEmpty()) {
                             echo "No matching changes found."
-                            env.MATCHED_FILES = ''
-                            env.PRODUCTS = ''
                         } else {
-                            env.MATCHED_FILES = matchedFiles.join(",")
-                            env.PRODUCTS = detectedProducts.join(",")
-                            echo "Matched files:\n${matchedFiles.join('\n')}"
-                            echo "Detected products: ${detectedProducts.join(', ')}"
+                            echo "Matched files:\n${matchedFilesGlobal.join('\n')}"
+                            echo "Detected products: ${detectedProductsGlobal.join(', ')}"
                         }
                     }
                 }
@@ -76,17 +76,16 @@ pipeline {
 
         stage('Copy Changed Files to Target') {
             when {
-                expression { return env.MATCHED_FILES?.trim() }
+                expression { return matchedFilesGlobal && matchedFilesGlobal.size() > 0 }
             }
             steps {
                 dir(env.REPO_DIR_PATH) {
-                    sshagent(credentials: ['jenkins-id']) {
+                    sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
                         script {
                             def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
-                            def filesToSend = env.MATCHED_FILES.split(",").collect { it.trim() }
 
                             for (host in hosts) {
-                                for (file in filesToSend) {
+                                for (file in matchedFilesGlobal) {
                                     if (fileExists(file)) {
                                         def filename = file.tokenize("/").last()
                                         echo "Copying ${file} to ${host}:${params.TARGET_PATH}/${filename}..."
@@ -106,10 +105,10 @@ pipeline {
 
         stage('Update Servers') {
             when {
-                expression { return env.MATCHED_FILES?.trim() }
+                expression { return matchedFilesGlobal && matchedFilesGlobal.size() > 0 }
             }
             steps {
-                sshagent(credentials: ['jenkins-id']) {
+                sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
                     script {
                         def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }
                         def updateCmd = ""
@@ -140,7 +139,7 @@ pipeline {
         stage('No Relevant Changes') {
             when {
                 not {
-                    expression { return env.MATCHED_FILES?.trim() }
+                    expression { return matchedFilesGlobal && matchedFilesGlobal.size() > 0 }
                 }
             }
             steps {
