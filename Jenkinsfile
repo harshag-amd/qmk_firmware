@@ -9,24 +9,20 @@ pipeline {
         choice(name: 'PKG_MANAGER', choices: ['apt', 'dnf', 'yum'], description: 'Package manager to run system update')
         string(name: 'GIT_REPO_URL', defaultValue: 'git@github.com:harshag-amd/qmk_firmware.git', description: 'Git repository URL')
         string(name: 'GIT_BRANCH', defaultValue: 'master', description: 'Git branch to track')
-        string(name: 'REPO_DIR', defaultValue: '.', description: 'Subdirectory to monitor for file changes (e.g., ip_fw or . for root)')
+        string(name: 'REPO_DIR', defaultValue: 'qmk_firmware', description: 'Subdirectory name for Git clone')
     }
 
     environment {
         MATCHED_FILES = ''
         IP_BLOCKS = ''
         PRODUCTS = ''
-        REPO_DIR_PATH = "${WORKSPACE}"
+        REPO_DIR_PATH = "${WORKSPACE}/${params.REPO_DIR}"
         COMMIT_TRACK_FILE = "${WORKSPACE}/.jenkins_commit"
     }
 
-    // Enable polling (will only trigger if scm is declared)
     triggers {
         pollSCM('* * * * *') // every minute
     }
-
-    // Required for pollSCM to work, although actual clone is manual
-
 
     stages {
         stage('Clone or Update Repository') {
@@ -59,12 +55,10 @@ pipeline {
                 dir(env.REPO_DIR_PATH) {
                     script {
                         def extensions = params.ALLOWED_EXTENSIONS.split("\n").collect { it.trim() }.findAll { it }
-                        def watchDir = params.REPO_DIR == '.' ? '' : params.REPO_DIR + '/'
-
                         def previousCommit = fileExists(env.COMMIT_TRACK_FILE) ? readFile(env.COMMIT_TRACK_FILE).trim() : ''
                         def currentCommit = sh(script: "git rev-parse HEAD", returnStdout: true).trim()
-
                         def changedFiles = []
+
                         if (previousCommit) {
                             echo "Comparing commits: ${previousCommit} -> ${currentCommit}"
                             changedFiles = sh(script: "git diff --name-only ${previousCommit} ${currentCommit}", returnStdout: true).trim().split("\n")
@@ -73,7 +67,6 @@ pipeline {
                             changedFiles = sh(script: "git diff-tree --no-commit-id --name-only -r ${currentCommit}", returnStdout: true).trim().split("\n")
                         }
 
-                        // Save current commit for next run
                         writeFile(file: env.COMMIT_TRACK_FILE, text: currentCommit)
 
                         def matchedFiles = [] as Set
@@ -82,11 +75,10 @@ pipeline {
 
                         for (file in changedFiles) {
                             for (ext in extensions) {
-                                if (file.endsWith(ext) && (watchDir.empty || file.startsWith(watchDir))) {
+                                if (file.endsWith(ext)) {
                                     matchedFiles << file
 
-                                    def relativePath = file.replaceFirst("^${watchDir}", '')
-                                    def matcher = relativePath =~ /([^\\/]+)\\/([^\\/]+)\\//
+                                    def matcher = file =~ /([^\\/]+)\\/([^\\/]+)\\//
                                     if (matcher.find()) {
                                         ipBlocks << matcher.group(1)
                                         products << matcher.group(2)
@@ -116,23 +108,22 @@ pipeline {
                 expression { return env.MATCHED_FILES?.trim() }
             }
             steps {
-                dir(env.REPO_DIR_PATH) {
-                    sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
-                        script {
-                            def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
-                            def changedFiles = env.MATCHED_FILES.split(",").collect { it.trim() }
+                sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
+                    script {
+                        def hosts = params.TARGET_HOSTS.split("\n").collect { it.trim() }.findAll { it }
+                        def changedFiles = env.MATCHED_FILES.split(",").collect { it.trim() }
 
-                            for (host in hosts) {
-                                for (file in changedFiles) {
-                                    if (fileExists(file)) {
-                                        def filename = file.tokenize("/").last()
-                                        sh """
-                                            echo "Copying ${file} to ${host}..."
-                                            scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${file} ${params.USERNAME}@${host}:${params.TARGET_PATH}/${filename}
-                                        """
-                                    } else {
-                                        echo "Warning: ${file} not found in workspace."
-                                    }
+                        for (host in hosts) {
+                            for (file in changedFiles) {
+                                def fullPath = "${env.REPO_DIR_PATH}/${file}"
+                                if (fileExists(fullPath)) {
+                                    def filename = file.tokenize("/").last()
+                                    echo "Copying ${fullPath} to ${host}:${params.TARGET_PATH}/${filename}"
+                                    sh """
+                                        scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "${fullPath}" ${params.USERNAME}@${host}:${params.TARGET_PATH}/${filename}
+                                    """
+                                } else {
+                                    echo "WARNING: File not found: ${fullPath}"
                                 }
                             }
                         }
@@ -164,8 +155,8 @@ pipeline {
                         }
 
                         for (host in hosts) {
+                            echo "Updating ${host} using ${params.PKG_MANAGER}..."
                             sh """
-                                echo "Running ${params.PKG_MANAGER} update on ${host}..."
                                 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${params.USERNAME}@${host} "${updateCmd}" <<< 'w'
                             """
                         }
