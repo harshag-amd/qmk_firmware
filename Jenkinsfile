@@ -16,7 +16,7 @@ pipeline {
         MATCHED_FILES = ''
         IP_BLOCKS = ''
         PRODUCTS = ''
-        REPO_DIR_PATH = "${WORKSPACE}/repo"
+        REPO_DIR_PATH = "${WORKSPACE}"
         COMMIT_TRACK_FILE = "${WORKSPACE}/.jenkins_commit"
     }
 
