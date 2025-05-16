@@ -27,13 +27,7 @@ pipeline {
             }
         }
 
-        stage('Clone Repo') {
-            steps {
-                dir("${params.REPO_DIR}") {
-                    git branch: "${params.GIT_BRANCH}", url: "${params.GIT_REPO_URL}"
-                }
-            }
-        }
+
 
         stage('Detect Changes') {
             steps {
