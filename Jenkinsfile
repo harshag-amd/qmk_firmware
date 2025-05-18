@@ -47,7 +47,33 @@ pipeline {
                 }
             }
         }
-		stage('🔍 Identify Changed Files') {
+
+        stage('📥 Clone or Update Git Repository') {
+            steps {
+                sshagent(credentials: ['Github-own-id']) {
+                    script {
+                        if (fileExists(env.CLONE_DIRECTORY)) {
+                            echo "Repository exists. Pulling updates..."
+                            dir(env.CLONE_DIRECTORY) {
+                                sh """
+                                    git fetch origin
+                                    git checkout ${params.SOURCE_BRANCH}
+                                    git reset --hard origin/${params.SOURCE_BRANCH}
+                                    git pull origin ${params.SOURCE_BRANCH}
+                                """
+                            }
+                        } else {
+                            echo "Cloning repository from ${params.SOURCE_REPOSITORY_URL}..."
+                            sh """
+                                git clone --depth 1000 --single-branch --branch ${params.SOURCE_BRANCH} --no-tags ${params.SOURCE_REPOSITORY_URL} ${env.CLONE_DIRECTORY}
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('🔍 Identify Changed Files') {
             steps {
                 script {
                     dir(env.CLONE_DIRECTORY) {
