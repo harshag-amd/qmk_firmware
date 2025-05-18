@@ -1,9 +1,6 @@
 pipeline {
     agent any
 
-    /***************
-     * PARAMETERS
-     ***************/
     parameters {
         string(name: 'DEPLOY_USER', defaultValue: 'herky', description: 'Username for target servers')
         text(name: 'TARGET_SERVER_IPS', defaultValue: '10.86.22.146', description: 'Target server IPs (one per line)')
@@ -34,39 +31,26 @@ strix
         string(name: 'EMAIL_RECIPIENT', defaultValue: 'harshavardhanreddy.gangavaram@amd.com', description: 'Email to send changed files list')
     }
 
-    /***************
-     * ENVIRONMENT
-     ***************/
     environment {
         TRACKING_COMMIT_FILE = "${WORKSPACE}/repo/.last_successful_commit"
         CLONE_DIRECTORY = "${WORKSPACE}/repo"
     }
 
-    /***************
-     * TRIGGERS
-     ***************/
     triggers {
-        pollSCM('* * * * *') // Poll Git repo every minute
+        pollSCM('* * * * *')
     }
 
-    /***************
-     * PIPELINE STAGES
-     ***************/
     stages {
         stage('🧪 Validate Input Parameters') {
             steps {
                 script {
-                    if (!params.ALLOWED_FILE_EXTENSIONS?.trim()) {
-                        error "ALLOWED_FILE_EXTENSIONS must not be empty!"
-                    }
-                    if (!params.TARGET_SERVER_IPS?.trim()) {
-                        error "TARGET_SERVER_IPS must not be empty!"
-                    }
+                    if (!params.ALLOWED_FILE_EXTENSIONS?.trim()) error "ALLOWED_FILE_EXTENSIONS must not be empty!"
+                    if (!params.TARGET_SERVER_IPS?.trim()) error "TARGET_SERVER_IPS must not be empty!"
                 }
             }
         }
 
-         stage('📥 Clone or Update Git Repository') {
+        stage('📥 Clone or Update Git Repository') {
             steps {
                 sshagent(credentials: ['Github-own-id']) {
                     script {
@@ -81,10 +65,8 @@ strix
                                 """
                             }
                         } else {
-                            echo "Cloning repository from ${params.SOURCE_REPOSITORY_URL}..."
-                            sh """
-                                git clone --depth 1000 --single-branch --branch ${params.SOURCE_BRANCH} --no-tags ${params.SOURCE_REPOSITORY_URL} ${env.CLONE_DIRECTORY}
-                            """
+                            echo "Cloning repository..."
+                            sh "git clone --depth 1000 --branch ${params.SOURCE_BRANCH} ${params.SOURCE_REPOSITORY_URL} ${env.CLONE_DIRECTORY}"
                         }
                     }
                 }
@@ -96,106 +78,82 @@ strix
                 script {
                     dir(env.CLONE_DIRECTORY) {
                         sh 'git fetch'
-
                         def lastKnownCommit = fileExists(env.TRACKING_COMMIT_FILE) ? readFile(env.TRACKING_COMMIT_FILE).trim() : ''
                         def currentCommit = sh(script: "git rev-parse HEAD", returnStdout: true).trim()
                         def diffRange = lastKnownCommit ? "${lastKnownCommit}..${currentCommit}" : "HEAD~1..HEAD"
-                        echo "Checking for file changes between: ${diffRange}"
+                        echo "Checking changes between ${diffRange}"
 
-                        def validExtensions = params.ALLOWED_FILE_EXTENSIONS
-                            .split("\n")
-                            .collect { it.trim().replaceFirst("^\\.", "") }
-                            .findAll { it }
-                        if (validExtensions.isEmpty()) {
-                            error "No valid file extensions provided. Aborting."
-                        }
+                        def extPattern = params.ALLOWED_FILE_EXTENSIONS
+                            .split("\n").collect { it.trim().replaceAll("^\\.", "") }.findAll { it }
+                            .join("|")
+                        if (!extPattern) error "No valid file extensions found"
 
-                        def regexPattern = validExtensions.join("|")
-                        echo "Filtering changes with extensions: ${regexPattern}"
-
-                        def changedFilesRaw = sh(
-                            script: "git diff --name-only ${diffRange} | grep -Ei '\\.(${regexPattern})\$' || true",
+                        def changedRaw = sh(
+                            script: "git diff --name-only ${diffRange} | grep -Ei '\\.(${extPattern})\$' || true",
                             returnStdout: true
                         ).trim()
 
-                        def changedFiles = changedFilesRaw ? changedFilesRaw.split("\n").findAll { it } : []
-                        if (changedFiles.isEmpty()) {
-                            echo "No matching files changed."
-                            writeFile file: 'changed_files.txt', text: ""
-                            writeFile file: 'products_files_map.txt', text: ""
-                            return
-                        }
+                        def changedFiles = changedRaw ? changedRaw.split("\n").findAll { it } : []
+                        def productKeywords = params.PRODUCT_KEYWORDS.split("\n").collect { it.trim().toLowerCase() }.findAll { it }
 
-                        echo "Detected ${changedFiles.size()} file(s):\n" + changedFiles.join("\n")
+                        def filtered = []
+                        def mapping = []
 
-                        def productKeywords = params.PRODUCT_KEYWORDS
-                            .split("\n")
-                            .collect { it.trim().toLowerCase() }
-                            .findAll { it }
-
-                        def filteredFiles = []
-                        def mapLines = []
-
-                        for (file in changedFiles) {
-                            def lowerPath = file.toLowerCase()
-                            def matchedProduct = productKeywords.find { keyword ->
-                                lowerPath.contains(keyword)
-                            }
-                            if (matchedProduct) {
-                                filteredFiles.add(file)
-                                mapLines.add("${matchedProduct}: ${file}")
+                        changedFiles.each { file ->
+                            def lower = file.toLowerCase()
+                            def match = productKeywords.find { lower.contains(it) }
+                            if (match) {
+                                filtered << file
+                                mapping << "${match}: ${file}"
                             }
                         }
 
-                        if (filteredFiles) {
-                            writeFile file: 'changed_files.txt', text: filteredFiles.join('\n')
-                            writeFile file: 'products_files_map.txt', text: mapLines.join('\n')
-                            echo "After filtering, ${filteredFiles.size()} file(s) will be deployed:\n" + filteredFiles.join("\n")
-                        } else {
-                            echo "No changed files matched the product keywords."
-                            writeFile file: 'changed_files.txt', text: ""
-                            writeFile file: 'products_files_map.txt', text: ""
-                        }
-
+                        writeFile file: 'changed_files.txt', text: filtered.join("\n")
+                        writeFile file: 'products_files_map.txt', text: mapping.join("\n")
                         writeFile file: env.TRACKING_COMMIT_FILE, text: currentCommit
+
+                        echo filtered ? "Detected ${filtered.size()} changed file(s):\n${filtered.join('\n')}" :
+                                        "No changed files matched product keywords"
                     }
                 }
             }
         }
 
         stage('🚀 Deploy Modified Files') {
-            when {
-                expression {
-                    fileExists("changed_files.txt") && readFile("changed_files.txt").trim()
-                }
-            }
             steps {
                 script {
-                    def changedFiles = readFile('changed_files.txt').trim().split("\n").findAll { it }
-                    def targetIPs = params.TARGET_SERVER_IPS.split("\n").findAll { it }
-        
+                    if (!fileExists('changed_files.txt')) {
+                        echo "changed_files.txt does not exist. Skipping deployment."
+                        return
+                    }
+
+                    def changed = readFile('changed_files.txt').trim()
+                    if (!changed) {
+                        echo "No files to deploy."
+                        return
+                    }
+
+                    def files = changed.split("\n").findAll { it }
+                    def ips = params.TARGET_SERVER_IPS.split("\n").findAll { it }
+
                     sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
-                        for (ip in targetIPs) {
-                            for (filePath in changedFiles) {
-                                def fullPath = "${filePath}"
-                                echo "Checking existence of: ${fullPath}"
-                                if (!fileExists(fullPath)) {
-                                    error "Missing file: ${fullPath}"
+                        for (ip in ips) {
+                            for (file in files) {
+                                def full = "${env.CLONE_DIRECTORY}/${file}"
+                                if (!fileExists(full)) {
+                                    error "File not found: ${full}"
                                 }
-                                echo "Transferring ${filePath} to ${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}"
+                                echo "Deploying ${file} to ${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}"
                                 sh """
-                                    scp -o StrictHostKeyChecking=no '${fullPath}' '${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}'
+                                    scp -o StrictHostKeyChecking=no '${full}' '${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}'
                                 """
                             }
-        
-                            // Also transfer the product-to-file mapping file
-                            def mapFilePath = "products_files_map.txt"
-                            if (fileExists(mapFilePath)) {
-                                sh """
-                                    scp -o StrictHostKeyChecking=no '${mapFilePath}' '${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}'
-                                """
+
+                            def mapFile = "${env.CLONE_DIRECTORY}/products_files_map.txt"
+                            if (fileExists(mapFile)) {
+                                sh "scp -o StrictHostKeyChecking=no '${mapFile}' '${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}'"
                             } else {
-                                echo "products_files_map.txt not found, skipping transfer"
+                                echo "Mapping file not found; skipping"
                             }
                         }
                     }
@@ -203,30 +161,24 @@ strix
             }
         }
 
-
-        
         stage('📧 Email Changed Files List') {
-            when {
-                expression {
-                    fileExists("${env.CLONE_DIRECTORY}/products_files_map.txt") &&
-                    readFile("${env.CLONE_DIRECTORY}/products_files_map.txt").trim()
-                }
-            }
             steps {
-                dir(env.CLONE_DIRECTORY) {
-                    script {
-                        def emailBody = readFile('products_files_map.txt')
-                        echo "Sending email to ${params.EMAIL_RECIPIENT} with changed files list"
-                        mail bcc: '',
-                             body: "Hello,\n\nHere is the list of changed files and associated products:\n\n${emailBody}\n\nRegards,\nJenkins CI",
-                             cc: '',
-                             replyTo: '',
-                             subject: "Jenkins - Changed Files List - Build #${currentBuild.number}",
-                             to: params.EMAIL_RECIPIENT
-        
-                        // Cleanup AFTER email is sent
-                        sh 'rm -f changed_files.txt products_files_map.txt'
+                script {
+                    def mapFile = "${env.CLONE_DIRECTORY}/products_files_map.txt"
+                    if (!fileExists(mapFile) || !readFile(mapFile).trim()) {
+                        echo "No product-to-file mappings found. Skipping email."
+                        return
                     }
+
+                    def emailBody = readFile(mapFile)
+                    mail bcc: '',
+                         body: "Hello,\n\nHere is the list of changed files and associated products:\n\n${emailBody}\n\nRegards,\nJenkins CI",
+                         cc: '',
+                         replyTo: '',
+                         subject: "Jenkins - Changed Files List - Build #${currentBuild.number}",
+                         to: params.EMAIL_RECIPIENT
+
+                    sh "rm -f changed_files.txt products_files_map.txt"
                 }
             }
         }
