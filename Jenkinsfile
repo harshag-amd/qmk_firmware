@@ -177,21 +177,22 @@ strix
                         def targetIPs = params.TARGET_SERVER_IPS.split("\n").findAll { it }
 
                         sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
-                            for (ip in targetIPs) {
+                           for (ip in targetIPs) {
                                 for (filePath in changedFiles) {
-                                    if (!fileExists(filePath)) {
-                                        error "Missing file: ${filePath}"
+                                    def localPath = "./${filePath}"
+                                    if (!fileExists(localPath)) {
+                                        error "Missing file: ${localPath}"
                                     }
                                     echo "Transferring ${filePath} to ${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}"
                                     sh """
-                                        scp -o StrictHostKeyChecking=no '${filePath}' '${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}'
+                                        scp -o StrictHostKeyChecking=no '${localPath}' '${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}'
                                     """
                                 }
-                                // Also transfer the products_files_map.txt
                                 sh """
                                     scp -o StrictHostKeyChecking=no 'products_files_map.txt' '${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}'
                                 """
                             }
+
                         }
                     }
                 }
