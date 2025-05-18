@@ -166,45 +166,43 @@ strix
         stage('🚀 Deploy Modified Files') {
             when {
                 expression {
-                    fileExists("${env.CLONE_DIRECTORY}/changed_files.txt") &&
-                    readFile("${env.CLONE_DIRECTORY}/changed_files.txt").trim()
+                    fileExists("changed_files.txt") && readFile("changed_files.txt").trim()
                 }
             }
             steps {
-                dir(env.CLONE_DIRECTORY) {
-                    script {
-                        def changedFiles = readFile('changed_files.txt').trim().split("\n").findAll { it }
-                        def targetIPs = params.TARGET_SERVER_IPS.split("\n").findAll { it }
+                script {
+                    def changedFiles = readFile('changed_files.txt').trim().split("\n").findAll { it }
+                    def targetIPs = params.TARGET_SERVER_IPS.split("\n").findAll { it }
         
-                        sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
-                            for (ip in targetIPs) {
-                                for (filePath in changedFiles) {
-                                    def fullPath = "${env.CLONE_DIRECTORY}/${filePath}"
-                                    echo "Checking existence of: ${fullPath}"
-                                    if (!fileExists(fullPath)) {
-                                        error "Missing file: ${fullPath}"
-                                    }
-                                    echo "Transferring ${filePath} to ${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}"
-                                    sh """
-                                        scp -o StrictHostKeyChecking=no '${fullPath}' '${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}'
-                                    """
+                    sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
+                        for (ip in targetIPs) {
+                            for (filePath in changedFiles) {
+                                def fullPath = "${filePath}"
+                                echo "Checking existence of: ${fullPath}"
+                                if (!fileExists(fullPath)) {
+                                    error "Missing file: ${fullPath}"
                                 }
+                                echo "Transferring ${filePath} to ${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}"
+                                sh """
+                                    scp -o StrictHostKeyChecking=no '${fullPath}' '${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}'
+                                """
+                            }
         
-                                // Also transfer the product-to-file mapping file
-                                def mapFilePath = "${env.CLONE_DIRECTORY}/products_files_map.txt"
-                                if (fileExists(mapFilePath)) {
-                                    sh """
-                                        scp -o StrictHostKeyChecking=no '${mapFilePath}' '${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}'
-                                    """
-                                } else {
-                                    echo "products_files_map.txt not found, skipping transfer"
-                                }
+                            // Also transfer the product-to-file mapping file
+                            def mapFilePath = "products_files_map.txt"
+                            if (fileExists(mapFilePath)) {
+                                sh """
+                                    scp -o StrictHostKeyChecking=no '${mapFilePath}' '${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}'
+                                """
+                            } else {
+                                echo "products_files_map.txt not found, skipping transfer"
                             }
                         }
                     }
                 }
             }
         }
+
 
         
         stage('📧 Email Changed Files List') {
