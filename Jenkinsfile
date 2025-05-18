@@ -24,14 +24,23 @@ zeppelin
 threadripper
 pinnacle
 strix''', description: 'Keywords to filter relevant products (one per line)')
-        string(name: 'EMAIL_RECIPIENT', defaultValue: 'you@example.com', description: 'Email to send changed files list')
+        string(name: 'EMAIL_RECIPIENT', defaultValue: 'harshavardhanreddy.gangavaram@amd.com', description: 'Email to send changed files list')
     }
 
     environment {
-        TRACKING_COMMIT_FILE = '.last_successful_commit'
+        TRACKING_COMMIT_FILE = "${WORKSPACE}/.last_successful_commit"
     }
 
     stages {
+        stage('🧪 Validate Inputs') {
+            steps {
+                script {
+                    if (!params.ALLOWED_FILE_EXTENSIONS?.trim()) error "ALLOWED_FILE_EXTENSIONS must not be empty!"
+                    if (!params.TARGET_SERVER_IPS?.trim()) error "TARGET_SERVER_IPS must not be empty!"
+                }
+            }
+        }
+
         stage('🔍 Detect Changes') {
             steps {
                 script {
@@ -41,9 +50,17 @@ strix''', description: 'Keywords to filter relevant products (one per line)')
 
                     echo "Comparing commits: ${diffRange}"
 
-                    def extensions = params.ALLOWED_FILE_EXTENSIONS.split('\n')*.trim().findAll { it }*.replaceFirst('^\\.', '')
+                    // Normalize extensions
+                    def extensions = []
+                    for (ext in params.ALLOWED_FILE_EXTENSIONS.split('\n')) {
+                        ext = ext.trim()
+                        if (ext) {
+                            extensions << ext.replaceFirst('^\\.', '')
+                        }
+                    }
                     def extRegex = extensions.join('|')
 
+                    // Get changed files
                     def changedFilesRaw = sh(
                         script: "git diff --name-only ${diffRange} | grep -Ei '\\.(${extRegex})\$' || true",
                         returnStdout: true
@@ -51,7 +68,16 @@ strix''', description: 'Keywords to filter relevant products (one per line)')
                     def changedFiles = changedFilesRaw ? changedFilesRaw.split('\n') : []
                     echo "Changed files:\n${changedFiles.join('\n')}"
 
-                    def productKeywords = params.PRODUCT_KEYWORDS.split('\n')*.trim().findAll { it }*.toLowerCase()
+                    // Normalize product keywords
+                    def productKeywords = []
+                    for (kw in params.PRODUCT_KEYWORDS.split('\n')) {
+                        kw = kw.trim()
+                        if (kw) {
+                            productKeywords << kw.toLowerCase()
+                        }
+                    }
+
+                    // Filter by product keywords
                     def filteredFiles = []
                     def mapLines = []
 
@@ -67,9 +93,11 @@ strix''', description: 'Keywords to filter relevant products (one per line)')
                     if (filteredFiles) {
                         writeFile file: 'changed_files.txt', text: filteredFiles.join('\n')
                         writeFile file: 'products_files_map.txt', text: mapLines.join('\n')
+                        echo "Filtered files:\n${filteredFiles.join('\n')}"
                     } else {
                         writeFile file: 'changed_files.txt', text: ''
                         writeFile file: 'products_files_map.txt', text: ''
+                        echo "No matching product files found."
                     }
 
                     writeFile file: env.TRACKING_COMMIT_FILE, text: currentCommit
@@ -79,25 +107,31 @@ strix''', description: 'Keywords to filter relevant products (one per line)')
 
         stage('🚀 Deploy to Targets') {
             when {
-                expression { fileExists('changed_files.txt') && readFile('changed_files.txt').trim() }
+                expression {
+                    fileExists('changed_files.txt') && readFile('changed_files.txt').trim()
+                }
             }
             steps {
                 script {
-                    def changedFiles = readFile('changed_files.txt').split('\n').findAll { it }
-                    def targetIPs = params.TARGET_SERVER_IPS.split('\n').findAll { it }
+                    def changedFiles = readFile('changed_files.txt').split('\n').findAll { it?.trim() }
+                    def targetIPs = params.TARGET_SERVER_IPS.split('\n').findAll { it?.trim() }
 
                     sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
                         for (ip in targetIPs) {
                             for (filePath in changedFiles) {
                                 if (!fileExists(filePath)) {
-                                    error "File ${filePath} not found!"
+                                    error "File not found: ${filePath}"
                                 }
-                                echo "Transferring ${filePath} to ${ip}"
-                                sh "scp -o StrictHostKeyChecking=no '${filePath}' '${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}'"
+                                echo "Transferring ${filePath} to ${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}"
+                                sh """
+                                    scp -o StrictHostKeyChecking=no '${filePath}' '${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}'
+                                """
                             }
 
                             if (fileExists('products_files_map.txt')) {
-                                sh "scp -o StrictHostKeyChecking=no 'products_files_map.txt' '${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}'"
+                                sh """
+                                    scp -o StrictHostKeyChecking=no 'products_files_map.txt' '${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}'
+                                """
                             }
                         }
                     }
@@ -105,16 +139,24 @@ strix''', description: 'Keywords to filter relevant products (one per line)')
             }
         }
 
-        stage('📧 Email Summary') {
+        stage('📧 Email Report') {
             when {
-                expression { fileExists('products_files_map.txt') && readFile('products_files_map.txt').trim() }
+                expression {
+                    fileExists('products_files_map.txt') && readFile('products_files_map.txt').trim()
+                }
             }
             steps {
                 script {
-                    def body = readFile('products_files_map.txt')
-                    mail to: params.EMAIL_RECIPIENT,
+                    def emailBody = readFile('products_files_map.txt')
+                    echo "Sending email to ${params.EMAIL_RECIPIENT}"
+                    mail bcc: '',
+                         body: "Hello,\n\nHere is the list of changed files and associated products:\n\n${emailBody}\n\nRegards,\nJenkins CI",
+                         cc: '',
+                         replyTo: '',
                          subject: "Jenkins - Changed Files List - Build #${currentBuild.number}",
-                         body: "Hello,\n\nHere is the list of changed files and associated products:\n\n${body}\n\nRegards,\nJenkins CI"
+                         to: params.EMAIL_RECIPIENT
+
+                    sh 'rm -f changed_files.txt products_files_map.txt'
                 }
             }
         }
