@@ -9,10 +9,29 @@ pipeline {
         text(name: 'TARGET_SERVER_IPS', defaultValue: '10.86.22.146', description: 'Target server IPs (one per line)')
         string(name: 'DEPLOY_DIRECTORY', defaultValue: '/opt/firmware/', description: 'Target directory on remote servers')
         text(name: 'ALLOWED_FILE_EXTENSIONS', defaultValue: '.h\n.c\n.bin', description: 'Allowed file extensions (one per line)')
-        choice(name: 'SYSTEM_PACKAGE_MANAGER', choices: ['apt', 'dnf', 'yum'], description: 'Package manager for system updates')
+        text(name: 'PRODUCT_KEYWORDS', defaultValue: '''stix
+halo
+kraken
+phoenix
+hawk
+fire
+raphael
+rembrandt
+gr
+navi
+vega
+raven1
+picasso
+raven2
+zeppelin
+threadripper
+pinnacle
+strix
+''', description: 'Keywords to filter relevant products (one per line)')
         string(name: 'SOURCE_REPOSITORY_URL', defaultValue: 'https://github.com/harshag-amd/qmk_firmware.git', description: 'Git repository URL')
         string(name: 'SOURCE_BRANCH', defaultValue: 'master', description: 'Branch to monitor')
         string(name: 'MONITORED_SUBDIRECTORY', defaultValue: '.', description: 'Subdirectory to watch for changes')
+        string(name: 'EMAIL_RECIPIENT', defaultValue: 'harshavardhanreddy.gangavaram@amd.com', description: 'Email to send changed files list')
     }
 
     /***************
@@ -34,7 +53,6 @@ pipeline {
      * PIPELINE STAGES
      ***************/
     stages {
-
         stage('🧪 Validate Input Parameters') {
             steps {
                 script {
@@ -48,7 +66,7 @@ pipeline {
             }
         }
 
-        stage('📥 Clone or Update Git Repository') {
+         stage('📥 Clone or Update Git Repository') {
             steps {
                 sshagent(credentials: ['Github-own-id']) {
                     script {
@@ -100,13 +118,43 @@ pipeline {
                             returnStdout: true
                         ).trim()
 
-                        if (changedFilesRaw) {
-                            def changedFiles = changedFilesRaw.split("\n").findAll { it }
-                            writeFile file: 'changed_files.txt', text: changedFiles.join('\n')
-                            echo "Detected ${changedFiles.size()} changed file(s):\n" + changedFiles.join("\n")
-                        } else {
+                        def changedFiles = changedFilesRaw ? changedFilesRaw.split("\n").findAll { it } : []
+                        if (changedFiles.isEmpty()) {
                             echo "No matching files changed."
                             writeFile file: 'changed_files.txt', text: ""
+                            writeFile file: 'products_files_map.txt', text: ""
+                            return
+                        }
+
+                        echo "Detected ${changedFiles.size()} file(s):\n" + changedFiles.join("\n")
+
+                        def productKeywords = params.PRODUCT_KEYWORDS
+                            .split("\n")
+                            .collect { it.trim().toLowerCase() }
+                            .findAll { it }
+
+                        def filteredFiles = []
+                        def mapLines = []
+
+                        for (file in changedFiles) {
+                            def lowerPath = file.toLowerCase()
+                            def matchedProduct = productKeywords.find { keyword ->
+                                lowerPath.contains(keyword)
+                            }
+                            if (matchedProduct) {
+                                filteredFiles.add(file)
+                                mapLines.add("${matchedProduct}: ${file}")
+                            }
+                        }
+
+                        if (filteredFiles) {
+                            writeFile file: 'changed_files.txt', text: filteredFiles.join('\n')
+                            writeFile file: 'products_files_map.txt', text: mapLines.join('\n')
+                            echo "After filtering, ${filteredFiles.size()} file(s) will be deployed:\n" + filteredFiles.join("\n")
+                        } else {
+                            echo "No changed files matched the product keywords."
+                            writeFile file: 'changed_files.txt', text: ""
+                            writeFile file: 'products_files_map.txt', text: ""
                         }
 
                         writeFile file: env.TRACKING_COMMIT_FILE, text: currentCommit
@@ -129,22 +177,48 @@ pipeline {
                         def targetIPs = params.TARGET_SERVER_IPS.split("\n").findAll { it }
 
                         sshagent(credentials: ['your-jenkins-ssh-credential-id']) {
-                            for (filePath in changedFiles) {
-                                if (!fileExists(filePath)) {
-                                    error "Missing file: ${filePath}"
-                                }
-
-                                for (ip in targetIPs) {
+                            for (ip in targetIPs) {
+                                for (filePath in changedFiles) {
+                                    if (!fileExists(filePath)) {
+                                        error "Missing file: ${filePath}"
+                                    }
                                     echo "Transferring ${filePath} to ${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}"
                                     sh """
                                         scp -o StrictHostKeyChecking=no '${filePath}' '${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}'
                                     """
                                 }
+                                // Also transfer the products_files_map.txt
+                                sh """
+                                    scp -o StrictHostKeyChecking=no 'products_files_map.txt' '${params.DEPLOY_USER}@${ip}:${params.DEPLOY_DIRECTORY}'
+                                """
                             }
                         }
-
-                        // Clean up after deployment
-                        sh 'rm -f changed_files.txt'
+                    }
+                }
+            }
+        }
+        
+        stage('📧 Email Changed Files List') {
+            when {
+                expression {
+                    fileExists("${env.CLONE_DIRECTORY}/products_files_map.txt") &&
+                    readFile("${env.CLONE_DIRECTORY}/products_files_map.txt").trim()
+                }
+            }
+            steps {
+                dir(env.CLONE_DIRECTORY) {
+                    script {
+                        def emailBody = readFile('products_files_map.txt')
+                        echo "Sending email to ${params.EMAIL_RECIPIENT} with changed files list"
+                        mail bcc: '',
+                             body: "Hello,\n\nHere is the list of changed files and associated products:\n\n${emailBody}\n\nRegards,\nJenkins CI",
+                             cc: '',
+                             replyTo: '',
+                             subject: "Jenkins - Changed Files List - Build #${currentBuild.number}",
+                             to: params.EMAIL_RECIPIENT
+        
+                        // Cleanup AFTER email is sent
+                        sh 'rm -f changed_files.txt products_files_map.txt'
                     }
                 }
             }
